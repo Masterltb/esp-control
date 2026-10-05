@@ -2,6 +2,9 @@
 
 An industrial-grade motion control and hardware telemetry system engineered for the **LILYGO T-Display-S3** (ESP32-S3R8 with 1.9" ST7789 8-bit parallel IPS display), featuring active signal clamping for zero servo drift, dual Wi-Fi/Serial communication, real-time HIL verification, and a modern browser dashboard.
 
+> 📘 **Tài liệu Bàn giao Kỹ thuật & Review Mã nguồn (Dành cho Bên thứ 3):**  
+> Xem chi tiết tại [HANDOVER_AND_CODE_REVIEW.md](HANDOVER_AND_CODE_REVIEW.md) để nắm toàn bộ sơ đồ chân, kiến trúc code, API, sơ đồ nguồn tổ ong/LM2596 và hướng dẫn vận hành.
+
 ---
 
 ## 1. Hardware Specification Summary
