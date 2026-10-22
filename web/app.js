@@ -1,18 +1,21 @@
 // ============================================================
-// ESP32-S3 SERVO TELEMETRY & CONTROL CENTER - DUAL SERVO ENGINE
+// ESP32-S3 SERVO TELEMETRY & CONTROL CENTER - QUAD SERVO ENGINE
+// 4 Servos • 2 FIFO Columns (Col 1: S1+S2, Col 2: S3+S4) • Active Ground Clamp
 // ============================================================
 
 (function () {
   'use strict';
 
-  // State Management for Dual Servos
+  // State Management for Quad Servos
   const state = {
     connected: false,
     wsConnected: false,
-    port: 'COM3',
+    port: 'COM4',
     ip: '192.168.4.1',
+    col1: { state: 'IDLE', active: false },
+    col2: { state: 'IDLE', active: false },
     s1: {
-      pin: 1,
+      pin: 18,
       currentPwm: 90,
       targetPwm: 90,
       state: 'Sẵn sàng',
@@ -27,7 +30,37 @@
       pauseMs: 500
     },
     s2: {
-      pin: 2,
+      pin: 19,
+      currentPwm: 90,
+      targetPwm: 90,
+      state: 'Sẵn sàng',
+      running: false,
+      cycle: 0,
+      cycles: 1,
+      stop: 90,
+      forward: 110,
+      reverse: 70,
+      forwardMs: 1000,
+      reverseMs: 1000,
+      pauseMs: 500
+    },
+    s3: {
+      pin: 21,
+      currentPwm: 90,
+      targetPwm: 90,
+      state: 'Sẵn sàng',
+      running: false,
+      cycle: 0,
+      cycles: 1,
+      stop: 90,
+      forward: 110,
+      reverse: 70,
+      forwardMs: 1000,
+      reverseMs: 1000,
+      pauseMs: 500
+    },
+    s4: {
+      pin: 22,
       currentPwm: 90,
       targetPwm: 90,
       state: 'Sẵn sàng',
@@ -51,7 +84,7 @@
       autoTrigger: 0,
       txEnabled: true
     },
-    oscilloscopeHistory: [] // [{ t, s1Pwm, s2Pwm }]
+    oscilloscopeHistory: [] // [{ t, s1Pwm, s2Pwm, s3Pwm, s4Pwm }]
   };
 
   // DOM Elements
@@ -74,6 +107,7 @@
     btnAutoS1: document.getElementById('btn-auto-s1'),
     btnAutoS2: document.getElementById('btn-auto-s2'),
     btnAutoBoth: document.getElementById('btn-auto-both'),
+
     // Header
     pillSerial: document.getElementById('pill-serial'),
     dotSerial: document.getElementById('dot-serial'),
@@ -86,6 +120,8 @@
     btnEstop: document.getElementById('btn-estop'),
 
     // Top Action Deck
+    topBtnCol1Dispense: document.getElementById('top-btn-col1-dispense'),
+    topBtnCol2Dispense: document.getElementById('top-btn-col2-dispense'),
     topBtnAllOpen: document.getElementById('top-btn-all-open'),
     topBtnAllClose: document.getElementById('top-btn-all-close'),
     topBtnAllStart: document.getElementById('top-btn-all-start'),
@@ -105,6 +141,20 @@
     topBtnS2TestFwd: document.getElementById('top-btn-s2-test-fwd'),
     topBtnS2TestRev: document.getElementById('top-btn-s2-test-rev'),
 
+    topBtnS3Open: document.getElementById('top-btn-s3-open'),
+    topBtnS3Close: document.getElementById('top-btn-s3-close'),
+    topBtnS3Start: document.getElementById('top-btn-s3-start'),
+    topBtnS3Stop: document.getElementById('top-btn-s3-stop'),
+    topBtnS3TestFwd: document.getElementById('top-btn-s3-test-fwd'),
+    topBtnS3TestRev: document.getElementById('top-btn-s3-test-rev'),
+
+    topBtnS4Open: document.getElementById('top-btn-s4-open'),
+    topBtnS4Close: document.getElementById('top-btn-s4-close'),
+    topBtnS4Start: document.getElementById('top-btn-s4-start'),
+    topBtnS4Stop: document.getElementById('top-btn-s4-stop'),
+    topBtnS4TestFwd: document.getElementById('top-btn-s4-test-fwd'),
+    topBtnS4TestRev: document.getElementById('top-btn-s4-test-rev'),
+
     // Stat Cards
     badgeS1State: document.getElementById('badge-s1-state'),
     cardS1Val: document.getElementById('card-s1-val'),
@@ -115,9 +165,20 @@
     cardS2Val: document.getElementById('card-s2-val'),
     cardS2Sub: document.getElementById('card-s2-sub'),
     barS2Cycle: document.getElementById('bar-s2-cycle'),
+
+    badgeS3State: document.getElementById('badge-s3-state'),
+    cardS3Val: document.getElementById('card-s3-val'),
+    cardS3Sub: document.getElementById('card-s3-sub'),
+    barS3Cycle: document.getElementById('bar-s3-cycle'),
+
+    badgeS4State: document.getElementById('badge-s4-state'),
+    cardS4Val: document.getElementById('card-s4-val'),
+    cardS4Sub: document.getElementById('card-s4-sub'),
+    barS4Cycle: document.getElementById('bar-s4-cycle'),
+
     cardClamp: document.getElementById('card-clamp'),
 
-    // Dual Gauges
+    // Quad Gauges
     gaugeCanvas1: document.getElementById('servoGaugeCanvas1'),
     s1GaugePwmBadge: document.getElementById('s1-gauge-pwm-badge'),
     s1GaugeAngleText: document.getElementById('s1-gauge-angle-text'),
@@ -127,6 +188,16 @@
     s2GaugePwmBadge: document.getElementById('s2-gauge-pwm-badge'),
     s2GaugeAngleText: document.getElementById('s2-gauge-angle-text'),
     s2GaugeStatePill: document.getElementById('s2-gauge-state-pill'),
+
+    gaugeCanvas3: document.getElementById('servoGaugeCanvas3'),
+    s3GaugePwmBadge: document.getElementById('s3-gauge-pwm-badge'),
+    s3GaugeAngleText: document.getElementById('s3-gauge-angle-text'),
+    s3GaugeStatePill: document.getElementById('s3-gauge-state-pill'),
+
+    gaugeCanvas4: document.getElementById('servoGaugeCanvas4'),
+    s4GaugePwmBadge: document.getElementById('s4-gauge-pwm-badge'),
+    s4GaugeAngleText: document.getElementById('s4-gauge-angle-text'),
+    s4GaugeStatePill: document.getElementById('s4-gauge-state-pill'),
 
     // State machine & Scope
     stateTimerDisplay: document.getElementById('state-timer-display'),
@@ -163,11 +234,39 @@
     btnS2CalibTest: document.getElementById('btn-s2-calib-test'),
     btnS2CalibSave: document.getElementById('btn-s2-calib-save'),
 
+    // Servo 3 Deck
+    btnS3Open: document.getElementById('btn-s3-open'),
+    btnS3Close: document.getElementById('btn-s3-close'),
+    btnS3Start: document.getElementById('btn-s3-start'),
+    btnS3Stop: document.getElementById('btn-s3-stop'),
+    btnS3TestFwd: document.getElementById('btn-s3-test-fwd'),
+    btnS3TestRev: document.getElementById('btn-s3-test-rev'),
+    sliderStop3: document.getElementById('slider-stop-3'),
+    s3CalibValDisplay: document.getElementById('s3-calib-val-display'),
+    btnS3CalibTest: document.getElementById('btn-s3-calib-test'),
+    btnS3CalibSave: document.getElementById('btn-s3-calib-save'),
+
+    // Servo 4 Deck
+    btnS4Open: document.getElementById('btn-s4-open'),
+    btnS4Close: document.getElementById('btn-s4-close'),
+    btnS4Start: document.getElementById('btn-s4-start'),
+    btnS4Stop: document.getElementById('btn-s4-stop'),
+    btnS4TestFwd: document.getElementById('btn-s4-test-fwd'),
+    btnS4TestRev: document.getElementById('btn-s4-test-rev'),
+    sliderStop4: document.getElementById('slider-stop-4'),
+    s4CalibValDisplay: document.getElementById('s4-calib-val-display'),
+    btnS4CalibTest: document.getElementById('btn-s4-calib-test'),
+    btnS4CalibSave: document.getElementById('btn-s4-calib-save'),
+
     // Config Tabs & Form
     tabBtnS1: document.getElementById('tab-btn-s1'),
     tabBtnS2: document.getElementById('tab-btn-s2'),
+    tabBtnS3: document.getElementById('tab-btn-s3'),
+    tabBtnS4: document.getElementById('tab-btn-s4'),
     cfgPaneS1: document.getElementById('cfg-pane-s1'),
     cfgPaneS2: document.getElementById('cfg-pane-s2'),
+    cfgPaneS3: document.getElementById('cfg-pane-s3'),
+    cfgPaneS4: document.getElementById('cfg-pane-s4'),
 
     cfgFwdSpeed1: document.getElementById('cfg-fwd-speed-1'),
     cfgFwdSpeedVal1: document.getElementById('cfg-fwd-speed-val-1'),
@@ -186,6 +285,24 @@
     cfgRevMs2: document.getElementById('cfg-rev-ms-2'),
     cfgPauseMs2: document.getElementById('cfg-pause-ms-2'),
     cfgCycles2: document.getElementById('cfg-cycles-2'),
+
+    cfgFwdSpeed3: document.getElementById('cfg-fwd-speed-3'),
+    cfgFwdSpeedVal3: document.getElementById('cfg-fwd-speed-val-3'),
+    cfgRevSpeed3: document.getElementById('cfg-rev-speed-3'),
+    cfgRevSpeedVal3: document.getElementById('cfg-rev-speed-val-3'),
+    cfgFwdMs3: document.getElementById('cfg-fwd-ms-3'),
+    cfgRevMs3: document.getElementById('cfg-rev-ms-3'),
+    cfgPauseMs3: document.getElementById('cfg-pause-ms-3'),
+    cfgCycles3: document.getElementById('cfg-cycles-3'),
+
+    cfgFwdSpeed4: document.getElementById('cfg-fwd-speed-4'),
+    cfgFwdSpeedVal4: document.getElementById('cfg-fwd-speed-val-4'),
+    cfgRevSpeed4: document.getElementById('cfg-rev-speed-4'),
+    cfgRevSpeedVal4: document.getElementById('cfg-rev-speed-val-4'),
+    cfgFwdMs4: document.getElementById('cfg-fwd-ms-4'),
+    cfgRevMs4: document.getElementById('cfg-rev-ms-4'),
+    cfgPauseMs4: document.getElementById('cfg-pause-ms-4'),
+    cfgCycles4: document.getElementById('cfg-cycles-4'),
 
     configForm: document.getElementById('config-form'),
     btnResetConfig: document.getElementById('btn-reset-config'),
@@ -287,7 +404,7 @@
       updateTelemetry(msg.data);
     } else if (msg.type === 'log') {
       let level = msg.level || 'esp';
-      if (msg.line.includes('[SERVO') || msg.line.includes('[MOTION]')) level = 'system';
+      if (msg.line.includes('[SERVO') || msg.line.includes('[MOTION]') || msg.line.includes('[FIFO]')) level = 'system';
       if (msg.line.includes('[ERROR]') || msg.line.includes('error')) level = 'error';
       addTerminalLine(msg.line, level);
     } else if (msg.type === 'hil_event') {
@@ -304,12 +421,52 @@
   // ============================================================
   let configLoadedOnce = false;
 
+  function updateServoCardAndBadge(sObj, cardValEl, cardSubEl, badgeEl, barCycleEl, gaugeBadgeEl, pin, ledcCh, defaultLabel) {
+    if (!cardValEl || !cardSubEl || !badgeEl) return;
+
+    if (!sObj.running) {
+      sObj.targetPwm = sObj.stop;
+      if (sObj.state.includes('mở') || sObj.state.includes('Đã mở')) {
+        cardValEl.textContent = 'OPENED (CLAMP)';
+        cardSubEl.textContent = `GPIO ${pin} • PWM Detached • Line Grounded (${sObj.stop}°)`;
+      } else if (sObj.state.includes('đóng') || sObj.state.includes('Đã đóng')) {
+        cardValEl.textContent = 'CLOSED (CLAMP)';
+        cardSubEl.textContent = `GPIO ${pin} • PWM Detached • Line Grounded (${sObj.stop}°)`;
+      } else {
+        cardValEl.textContent = 'IDLE (CLAMP)';
+        cardSubEl.textContent = `GPIO ${pin} • PWM Detached • Line Grounded (${sObj.stop}°)`;
+      }
+    } else {
+      if (sObj.state.includes('thuận') || sObj.state.includes('mở')) {
+        sObj.targetPwm = sObj.forward;
+        cardValEl.textContent = 'QUAY THUẬN / MỞ';
+        cardSubEl.textContent = `GPIO ${pin} • LEDC ${ledcCh} • ${sObj.forward}° CCW`;
+      } else if (sObj.state.includes('nghịch') || sObj.state.includes('đóng')) {
+        sObj.targetPwm = sObj.reverse;
+        cardValEl.textContent = 'QUAY NGHỊCH / ĐÓNG';
+        cardSubEl.textContent = `GPIO ${pin} • LEDC ${ledcCh} • ${sObj.reverse}° CW`;
+      } else {
+        sObj.targetPwm = sObj.stop;
+        cardValEl.textContent = 'TẠM DỪNG';
+        cardSubEl.textContent = `GPIO ${pin} • Active Ground Clamped`;
+      }
+    }
+    badgeEl.textContent = sObj.state.toUpperCase();
+    if (barCycleEl) {
+      const pct = sObj.cycles > 0 ? Math.min(100, Math.round((sObj.cycle / sObj.cycles) * 100)) : 0;
+      barCycleEl.style.width = `${pct}%`;
+    }
+    if (gaugeBadgeEl) {
+      gaugeBadgeEl.textContent = `${Math.round(sObj.targetPwm)}° (${sObj.state})`;
+    }
+  }
+
   function updateTelemetry(data) {
     state.connected = data.connected !== false;
-    state.port = data.port || 'COM3';
+    state.port = data.port || 'COM5';
     state.ip = data.ip || '192.168.4.1';
 
-    // Parse S1 data
+    // Parse S1..S4 data
     const s1Data = data.s1 || {
       state: data.state || 'Sẵn sàng',
       running: !!data.running,
@@ -323,8 +480,33 @@
       pauseMs: data.pauseMs || 500
     };
 
-    // Parse S2 data
     const s2Data = data.s2 || {
+      state: 'Sẵn sàng',
+      running: false,
+      cycle: 0,
+      cycles: 1,
+      stop: 90,
+      forward: 110,
+      reverse: 70,
+      forwardMs: 1000,
+      reverseMs: 1000,
+      pauseMs: 500
+    };
+
+    const s3Data = data.s3 || {
+      state: 'Sẵn sàng',
+      running: false,
+      cycle: 0,
+      cycles: 1,
+      stop: 90,
+      forward: 110,
+      reverse: 70,
+      forwardMs: 1000,
+      reverseMs: 1000,
+      pauseMs: 500
+    };
+
+    const s4Data = data.s4 || {
       state: 'Sẵn sàng',
       running: false,
       cycle: 0,
@@ -339,6 +521,11 @@
 
     Object.assign(state.s1, s1Data);
     Object.assign(state.s2, s2Data);
+    Object.assign(state.s3, s3Data);
+    Object.assign(state.s4, s4Data);
+
+    if (data.col1) Object.assign(state.col1, data.col1);
+    if (data.col2) Object.assign(state.col2, data.col2);
 
     // Update connection status
     if (el.valPort) el.valPort.textContent = `${state.port} (115200)`;
@@ -347,156 +534,52 @@
       el.dotSerial.className = state.connected ? 'pulse-dot green' : 'pulse-dot red';
     }
 
-    // --- Update S1 Card & Target PWM ---
-    if (!state.s1.running) {
-      state.s1.targetPwm = state.s1.stop;
-      if (state.s1.state.includes('mở') || state.s1.state.includes('Đã mở')) {
-        el.cardS1Val.textContent = 'OPENED (CLAMP)';
-        el.cardS1Sub.textContent = `GPIO 1 • PWM Detached • Line Grounded (${state.s1.stop}°)`;
-      } else if (state.s1.state.includes('đóng') || state.s1.state.includes('Đã đóng')) {
-        el.cardS1Val.textContent = 'CLOSED (CLAMP)';
-        el.cardS1Sub.textContent = `GPIO 1 • PWM Detached • Line Grounded (${state.s1.stop}°)`;
-      } else {
-        el.cardS1Val.textContent = 'IDLE (CLAMP)';
-        el.cardS1Sub.textContent = `GPIO 1 • PWM Detached • Line Grounded (${state.s1.stop}°)`;
-      }
-    } else {
-      if (state.s1.state.includes('thuận') || state.s1.state.includes('mở')) {
-        state.s1.targetPwm = state.s1.forward;
-        el.cardS1Val.textContent = 'QUAY THUẬN / MỞ';
-        el.cardS1Sub.textContent = `GPIO 1 • LEDC Ch0 • ${state.s1.forward}° CCW`;
-      } else if (state.s1.state.includes('nghịch') || state.s1.state.includes('đóng')) {
-        state.s1.targetPwm = state.s1.reverse;
-        el.cardS1Val.textContent = 'QUAY NGHỊCH / ĐÓNG';
-        el.cardS1Sub.textContent = `GPIO 1 • LEDC Ch0 • ${state.s1.reverse}° CW`;
-      } else {
-        state.s1.targetPwm = state.s1.stop;
-        el.cardS1Val.textContent = 'TẠM DỪNG';
-        el.cardS1Sub.textContent = `GPIO 1 • Active Ground Clamped`;
-      }
+    // --- Update S1..S4 Cards & Target PWM ---
+    updateServoCardAndBadge(state.s1, el.cardS1Val, el.cardS1Sub, el.badgeS1State, el.barS1Cycle, el.s1GaugePwmBadge, 18, 'Ch0', 'S1');
+    updateServoCardAndBadge(state.s2, el.cardS2Val, el.cardS2Sub, el.badgeS2State, el.barS2Cycle, el.s2GaugePwmBadge, 19, 'Ch1', 'S2');
+    updateServoCardAndBadge(state.s3, el.cardS3Val, el.cardS3Sub, el.badgeS3State, el.barS3Cycle, el.s3GaugePwmBadge, 21, 'Ch2', 'S3');
+    updateServoCardAndBadge(state.s4, el.cardS4Val, el.cardS4Sub, el.badgeS4State, el.barS4Cycle, el.s4GaugePwmBadge, 22, 'Ch3', 'S4');
+
+    // Clamp indicator
+    if (el.cardClamp) {
+      const anyActive = state.s1.running || state.s2.running || state.s3.running || state.s4.running;
+      el.cardClamp.textContent = anyActive ? 'PWM ACTIVE' : 'QUAD ACTIVE LOW';
+      el.cardClamp.className = anyActive ? 'stat-value text-amber' : 'stat-value text-emerald';
     }
-    el.badgeS1State.textContent = state.s1.state.toUpperCase();
-    const s1Pct = state.s1.cycles > 0 ? Math.min(100, Math.round((state.s1.cycle / state.s1.cycles) * 100)) : 0;
-    el.barS1Cycle.style.width = `${s1Pct}%`;
-    el.s1GaugePwmBadge.textContent = `${Math.round(state.s1.targetPwm)}° (${state.s1.state})`;
 
-    // --- Update S2 Card & Target PWM ---
-    if (!state.s2.running) {
-      state.s2.targetPwm = state.s2.stop;
-      if (state.s2.state.includes('mở') || state.s2.state.includes('Đã mở')) {
-        el.cardS2Val.textContent = 'OPENED (CLAMP)';
-        el.cardS2Sub.textContent = `GPIO 2 • PWM Detached • Line Grounded (${state.s2.stop}°)`;
-      } else if (state.s2.state.includes('đóng') || state.s2.state.includes('Đã đóng')) {
-        el.cardS2Val.textContent = 'CLOSED (CLAMP)';
-        el.cardS2Sub.textContent = `GPIO 2 • PWM Detached • Line Grounded (${state.s2.stop}°)`;
-      } else {
-        el.cardS2Val.textContent = 'IDLE (CLAMP)';
-        el.cardS2Sub.textContent = `GPIO 2 • PWM Detached • Line Grounded (${state.s2.stop}°)`;
-      }
-    } else {
-      if (state.s2.state.includes('thuận') || state.s2.state.includes('mở')) {
-        state.s2.targetPwm = state.s2.forward;
-        el.cardS2Val.textContent = 'QUAY THUẬN / MỞ';
-        el.cardS2Sub.textContent = `GPIO 2 • LEDC Ch1 • ${state.s2.forward}° CCW`;
-      } else if (state.s2.state.includes('nghịch') || state.s2.state.includes('đóng')) {
-        state.s2.targetPwm = state.s2.reverse;
-        el.cardS2Val.textContent = 'QUAY NGHỊCH / ĐÓNG';
-        el.cardS2Sub.textContent = `GPIO 2 • LEDC Ch1 • ${state.s2.reverse}° CW`;
-      } else {
-        state.s2.targetPwm = state.s2.stop;
-        el.cardS2Val.textContent = 'TẠM DỪNG';
-        el.cardS2Sub.textContent = `GPIO 2 • Active Ground Clamped`;
-      }
-    }
-    el.badgeS2State.textContent = state.s2.state.toUpperCase();
-    const s2Pct = state.s2.cycles > 0 ? Math.min(100, Math.round((state.s2.cycle / state.s2.cycles) * 100)) : 0;
-    el.barS2Cycle.style.width = `${s2Pct}%`;
-    el.s2GaugePwmBadge.textContent = `${Math.round(state.s2.targetPwm)}° (${state.s2.state})`;
-
-    // Timer display text
-    el.stateTimerDisplay.textContent = `S1: ${state.s1.state} | S2: ${state.s2.state}`;
-
-    // --- Update IR Bowl Detection Deck ---
+    // IR Bowl Status
     if (data.ir) {
-      const prevCount = state.ir.count;
       Object.assign(state.ir, data.ir);
-
-      // Beam status card & radar circle
-      if (el.irStatusCard && el.irRadarCircle && el.irStatusMain) {
-        if (state.ir.detected) {
-          el.irStatusCard.classList.add('detected');
-          el.irRadarCircle.classList.add('detected');
-          el.irStatusMain.classList.add('detected');
-          el.irStatusMain.textContent = 'PHÁT HIỆN TÔ! (BOWL DETECTED)';
-          if (el.irIcon) el.irIcon.textContent = '🍲';
-          if (el.irStatusSub) el.irStatusSub.textContent = `Tô đang đi qua vùng quét cảm biến (GPIO ${state.ir.pin})`;
-        } else {
-          el.irStatusCard.classList.remove('detected');
-          el.irRadarCircle.classList.remove('detected');
-          el.irStatusMain.classList.remove('detected');
-          el.irStatusMain.textContent = 'THÔNG SUỐT (CLEAR)';
-          if (el.irIcon) el.irIcon.textContent = '◎';
-          if (el.irStatusSub) el.irStatusSub.textContent = 'Chùm tia thông suốt - Sẵn sàng nhận diện khi tô đi qua';
-        }
+      if (el.irCounterNumber) el.irCounterNumber.textContent = state.ir.count;
+      if (el.irTagRaw) el.irTagRaw.textContent = `RAW: ${state.ir.raw ? 'HIGH (TRỐNG)' : 'LOW (CÓ TÔ)'}`;
+      if (el.irTagBlock) el.irTagBlock.textContent = `CHẮN: ${state.ir.blockMs} ms`;
+      if (el.irRadarCircle) {
+        el.irRadarCircle.className = state.ir.detected ? 'radar-circle detected' : 'radar-circle';
       }
-
-      if (el.irTagRaw) {
-        el.irTagRaw.textContent = `RAW: ${state.ir.raw === 0 ? 'LOW (0)' : 'HIGH (1)'}`;
+      if (el.irStatusCard) {
+        el.irStatusCard.className = state.ir.detected ? 'ir-visual-col detected' : 'ir-visual-col';
       }
-      if (el.irTagBlock) {
-        el.irTagBlock.textContent = `THỜI GIAN CHE: ${state.ir.blockMs || 0} ms`;
+      if (el.irStatusMain) {
+        el.irStatusMain.textContent = state.ir.detected ? 'PHÁT HIỆN TÔ TRÁI CÂY' : 'KHOANG CHỜ TRỐNG';
+        el.irStatusMain.style.color = state.ir.detected ? '#ef4444' : '#10b981';
       }
-
-      // Counter
-      if (el.irCounterNumber) {
-        el.irCounterNumber.textContent = String(state.ir.count || 0).padStart(4, '0');
+      if (el.irStatusSub) {
+        el.irStatusSub.textContent = state.ir.detected
+          ? `Tia hồng ngoại bị ngắt ${state.ir.blockMs}ms • Chuẩn bị nhả khay`
+          : 'Chùm tia hồng ngoại thông suốt • Sẵn sàng đón tô rơi';
       }
-
-      if (state.ir.count > prevCount && prevCount > 0) {
-        if (el.irLastTimeText) {
-          el.irLastTimeText.textContent = `Lần cuối: ${new Date().toLocaleTimeString()}`;
-        }
-        showToast(`🥣 Tô #${state.ir.count} vừa đi qua!`, 'info');
-      }
-
-      // TX LED badge
-      if (el.irTxBadge) {
-        if (state.ir.txEnabled) {
-          el.irTxBadge.className = 'badge-mini';
-          el.irTxBadge.textContent = 'TX: BẬT';
-        } else {
-          el.irTxBadge.className = 'badge-mini off';
-          el.irTxBadge.textContent = 'TX: TẮT';
-        }
-      }
-
-      // Auto trigger mode buttons
-      const autoMode = state.ir.autoTrigger || 0;
-      [
-        { btn: el.btnAutoOff, mode: 0 },
-        { btn: el.btnAutoS1, mode: 1 },
-        { btn: el.btnAutoS2, mode: 2 },
-        { btn: el.btnAutoBoth, mode: 3 }
-      ].forEach(item => {
-        if (item.btn) {
-          if (item.mode === autoMode) {
-            item.btn.classList.add('active');
-          } else {
-            item.btn.classList.remove('active');
-          }
-        }
-      });
     }
 
-    // Update State Machine Active Node (reflects active runner)
+    // State Visualizer
     updateStateMachineVisualizer();
 
-    // Record Oscilloscope point
-    const now = Date.now();
+    // Push oscilloscope history
     state.oscilloscopeHistory.push({
-      t: now,
-      s1Pwm: state.s1.targetPwm,
-      s2Pwm: state.s2.targetPwm
+      t: Date.now(),
+      s1Pwm: state.s1.currentPwm,
+      s2Pwm: state.s2.currentPwm,
+      s3Pwm: state.s3.currentPwm,
+      s4Pwm: state.s4.currentPwm
     });
     if (state.oscilloscopeHistory.length > 300) {
       state.oscilloscopeHistory.shift();
@@ -506,28 +589,40 @@
     if (!configLoadedOnce && (data.servoForward || (data.s1 && data.s1.forward))) {
       configLoadedOnce = true;
       // S1 Form
-      el.sliderStop1.value = state.s1.stop;
-      el.s1CalibValDisplay.textContent = `${state.s1.stop}°`;
-      el.cfgFwdSpeed1.value = state.s1.forward;
-      el.cfgFwdSpeedVal1.textContent = state.s1.forward;
-      el.cfgRevSpeed1.value = state.s1.reverse;
-      el.cfgRevSpeedVal1.textContent = state.s1.reverse;
-      el.cfgFwdMs1.value = state.s1.forwardMs;
-      el.cfgRevMs1.value = state.s1.reverseMs;
-      el.cfgPauseMs1.value = state.s1.pauseMs;
-      el.cfgCycles1.value = state.s1.cycles;
+      if (el.sliderStop1) { el.sliderStop1.value = state.s1.stop; el.s1CalibValDisplay.textContent = `${state.s1.stop}°`; }
+      if (el.cfgFwdSpeed1) { el.cfgFwdSpeed1.value = state.s1.forward; el.cfgFwdSpeedVal1.textContent = state.s1.forward; }
+      if (el.cfgRevSpeed1) { el.cfgRevSpeed1.value = state.s1.reverse; el.cfgRevSpeedVal1.textContent = state.s1.reverse; }
+      if (el.cfgFwdMs1) el.cfgFwdMs1.value = state.s1.forwardMs;
+      if (el.cfgRevMs1) el.cfgRevMs1.value = state.s1.reverseMs;
+      if (el.cfgPauseMs1) el.cfgPauseMs1.value = state.s1.pauseMs;
+      if (el.cfgCycles1) el.cfgCycles1.value = state.s1.cycles;
 
       // S2 Form
-      el.sliderStop2.value = state.s2.stop;
-      el.s2CalibValDisplay.textContent = `${state.s2.stop}°`;
-      el.cfgFwdSpeed2.value = state.s2.forward;
-      el.cfgFwdSpeedVal2.textContent = state.s2.forward;
-      el.cfgRevSpeed2.value = state.s2.reverse;
-      el.cfgRevSpeedVal2.textContent = state.s2.reverse;
-      el.cfgFwdMs2.value = state.s2.forwardMs;
-      el.cfgRevMs2.value = state.s2.reverseMs;
-      el.cfgPauseMs2.value = state.s2.pauseMs;
-      el.cfgCycles2.value = state.s2.cycles;
+      if (el.sliderStop2) { el.sliderStop2.value = state.s2.stop; el.s2CalibValDisplay.textContent = `${state.s2.stop}°`; }
+      if (el.cfgFwdSpeed2) { el.cfgFwdSpeed2.value = state.s2.forward; el.cfgFwdSpeedVal2.textContent = state.s2.forward; }
+      if (el.cfgRevSpeed2) { el.cfgRevSpeed2.value = state.s2.reverse; el.cfgRevSpeedVal2.textContent = state.s2.reverse; }
+      if (el.cfgFwdMs2) el.cfgFwdMs2.value = state.s2.forwardMs;
+      if (el.cfgRevMs2) el.cfgRevMs2.value = state.s2.reverseMs;
+      if (el.cfgPauseMs2) el.cfgPauseMs2.value = state.s2.pauseMs;
+      if (el.cfgCycles2) el.cfgCycles2.value = state.s2.cycles;
+
+      // S3 Form
+      if (el.sliderStop3) { el.sliderStop3.value = state.s3.stop; el.s3CalibValDisplay.textContent = `${state.s3.stop}°`; }
+      if (el.cfgFwdSpeed3) { el.cfgFwdSpeed3.value = state.s3.forward; el.cfgFwdSpeedVal3.textContent = state.s3.forward; }
+      if (el.cfgRevSpeed3) { el.cfgRevSpeed3.value = state.s3.reverse; el.cfgRevSpeedVal3.textContent = state.s3.reverse; }
+      if (el.cfgFwdMs3) el.cfgFwdMs3.value = state.s3.forwardMs;
+      if (el.cfgRevMs3) el.cfgRevMs3.value = state.s3.reverseMs;
+      if (el.cfgPauseMs3) el.cfgPauseMs3.value = state.s3.pauseMs;
+      if (el.cfgCycles3) el.cfgCycles3.value = state.s3.cycles;
+
+      // S4 Form
+      if (el.sliderStop4) { el.sliderStop4.value = state.s4.stop; el.s4CalibValDisplay.textContent = `${state.s4.stop}°`; }
+      if (el.cfgFwdSpeed4) { el.cfgFwdSpeed4.value = state.s4.forward; el.cfgFwdSpeedVal4.textContent = state.s4.forward; }
+      if (el.cfgRevSpeed4) { el.cfgRevSpeed4.value = state.s4.reverse; el.cfgRevSpeedVal4.textContent = state.s4.reverse; }
+      if (el.cfgFwdMs4) el.cfgFwdMs4.value = state.s4.forwardMs;
+      if (el.cfgRevMs4) el.cfgRevMs4.value = state.s4.reverseMs;
+      if (el.cfgPauseMs4) el.cfgPauseMs4.value = state.s4.pauseMs;
+      if (el.cfgCycles4) el.cfgCycles4.value = state.s4.cycles;
     }
   }
 
@@ -535,36 +630,36 @@
     const nodes = el.stateNodes;
     Object.values(nodes).forEach(n => n && n.classList.remove('active'));
 
-    const st1 = state.s1.state;
-    const st2 = state.s2.state;
-    const anyRunning = state.s1.running || state.s2.running;
+    const anyRunning = state.s1.running || state.s2.running || state.s3.running || state.s4.running;
 
     if (!anyRunning) {
-      if (st1.includes('Hoàn thành') || st2.includes('Hoàn thành')) {
-        nodes.complete.classList.add('active');
+      if (state.s1.state.includes('Hoàn thành') || state.s2.state.includes('Hoàn thành') || state.s3.state.includes('Hoàn thành') || state.s4.state.includes('Hoàn thành')) {
+        if (nodes.complete) nodes.complete.classList.add('active');
       } else {
-        nodes.idle.classList.add('active');
+        if (nodes.idle) nodes.idle.classList.add('active');
       }
       return;
     }
 
-    const activeSt = state.s1.running ? st1 : st2;
+    const activeSt = (state.s1.running ? state.s1.state : (state.s2.running ? state.s2.state : (state.s3.running ? state.s3.state : state.s4.state)));
     if (activeSt.includes('thuận') || activeSt.includes('mở')) {
-      nodes.fwd.classList.add('active');
+      if (nodes.fwd) nodes.fwd.classList.add('active');
     } else if (activeSt.includes('nghịch') || activeSt.includes('đóng')) {
-      nodes.rev.classList.add('active');
+      if (nodes.rev) nodes.rev.classList.add('active');
     } else if (activeSt.includes('Tạm dừng') || activeSt.includes('dừng')) {
-      nodes.pause1.classList.add('active');
+      if (nodes.pause1) nodes.pause1.classList.add('active');
     } else {
-      nodes.idle.classList.add('active');
+      if (nodes.idle) nodes.idle.classList.add('active');
     }
   }
 
   // ============================================================
-  // DUAL GAUGE RENDER LOOPS
+  // QUAD GAUGE RENDER LOOPS
   // ============================================================
   const ctx1 = el.gaugeCanvas1 ? el.gaugeCanvas1.getContext('2d') : null;
   const ctx2 = el.gaugeCanvas2 ? el.gaugeCanvas2.getContext('2d') : null;
+  const ctx3 = el.gaugeCanvas3 ? el.gaugeCanvas3.getContext('2d') : null;
+  const ctx4 = el.gaugeCanvas4 ? el.gaugeCanvas4.getContext('2d') : null;
   const scopeCtx = el.scopeCanvas ? el.scopeCanvas.getContext('2d') : null;
 
   function drawSingleGauge(ctx, canvas, sObj, angleTextEl, statePillEl, primaryColor, accentColor) {
@@ -660,10 +755,12 @@
     }
   }
 
-  function renderDualGauges() {
+  function renderQuadGauges() {
     drawSingleGauge(ctx1, el.gaugeCanvas1, state.s1, el.s1GaugeAngleText, el.s1GaugeStatePill, '#00f2fe', '#00f2fe');
     drawSingleGauge(ctx2, el.gaugeCanvas2, state.s2, el.s2GaugeAngleText, el.s2GaugeStatePill, '#10b981', '#10b981');
-    requestAnimationFrame(renderDualGauges);
+    drawSingleGauge(ctx3, el.gaugeCanvas3, state.s3, el.s3GaugeAngleText, el.s3GaugeStatePill, '#f59e0b', '#f59e0b');
+    drawSingleGauge(ctx4, el.gaugeCanvas4, state.s4, el.s4GaugeAngleText, el.s4GaugeStatePill, '#a855f7', '#a855f7');
+    requestAnimationFrame(renderQuadGauges);
   }
 
   function renderOscilloscope() {
@@ -704,7 +801,7 @@
     if (history.length > 1) {
       const step = w / 300;
 
-      // Plot Channel 1: Servo 1 (Cyan)
+      // Plot Ch1: S1 (Cyan)
       scopeCtx.beginPath();
       for (let i = 0; i < history.length; i++) {
         const pt = history[i];
@@ -717,7 +814,7 @@
       scopeCtx.lineWidth = 2;
       scopeCtx.stroke();
 
-      // Plot Channel 2: Servo 2 (Emerald)
+      // Plot Ch2: S2 (Emerald)
       scopeCtx.beginPath();
       for (let i = 0; i < history.length; i++) {
         const pt = history[i];
@@ -727,6 +824,32 @@
         else scopeCtx.lineTo(x, y);
       }
       scopeCtx.strokeStyle = '#10b981';
+      scopeCtx.lineWidth = 2;
+      scopeCtx.stroke();
+
+      // Plot Ch3: S3 (Amber)
+      scopeCtx.beginPath();
+      for (let i = 0; i < history.length; i++) {
+        const pt = history[i];
+        const x = (300 - history.length + i) * step;
+        const y = h - ((pt.s3Pwm || 90) / 180) * h;
+        if (i === 0) scopeCtx.moveTo(x, y);
+        else scopeCtx.lineTo(x, y);
+      }
+      scopeCtx.strokeStyle = '#f59e0b';
+      scopeCtx.lineWidth = 2;
+      scopeCtx.stroke();
+
+      // Plot Ch4: S4 (Purple)
+      scopeCtx.beginPath();
+      for (let i = 0; i < history.length; i++) {
+        const pt = history[i];
+        const x = (300 - history.length + i) * step;
+        const y = h - ((pt.s4Pwm || 90) / 180) * h;
+        if (i === 0) scopeCtx.moveTo(x, y);
+        else scopeCtx.lineTo(x, y);
+      }
+      scopeCtx.strokeStyle = '#a855f7';
       scopeCtx.lineWidth = 2;
       scopeCtx.stroke();
     }
@@ -800,6 +923,16 @@
   // EVENT LISTENERS
   // ============================================================
   function initEventListeners() {
+    // Column FIFO Triggers
+    if (el.topBtnCol1Dispense) el.topBtnCol1Dispense.addEventListener('click', () => {
+      sendCommand('DISPENSE 1');
+      showToast('Kích hoạt xả tô FIFO Cột 1 (S1 nhả tô -> S2 nạp lại)', 'info');
+    });
+    if (el.topBtnCol2Dispense) el.topBtnCol2Dispense.addEventListener('click', () => {
+      sendCommand('DISPENSE 2');
+      showToast('Kích hoạt xả tô FIFO Cột 2 (S3 nhả tô -> S4 nạp lại)', 'info');
+    });
+
     // Master Commands
     if (el.topBtnAllOpen) el.topBtnAllOpen.addEventListener('click', () => sendCommand('ALL_OPEN'));
     if (el.topBtnAllClose) el.topBtnAllClose.addEventListener('click', () => sendCommand('ALL_CLOSE'));
@@ -807,47 +940,89 @@
     if (el.topBtnAllStop) el.topBtnAllStop.addEventListener('click', () => sendCommand('ALL_STOP'));
     if (el.btnEstop) el.btnEstop.addEventListener('click', () => sendCommand('ALL_STOP'));
 
-    // Servo 1 Commands (Top Deck & Panel)
-    const s1OpenHandler = () => sendCommand('S1_OPEN');
-    const s1CloseHandler = () => sendCommand('S1_CLOSE');
-    const s1StartHandler = () => sendCommand('S1_START');
-    const s1StopHandler = () => sendCommand('S1_STOP');
-    const s1TestFwdHandler = () => sendCommand('S1_TEST_FWD');
-    const s1TestRevHandler = () => sendCommand('S1_TEST_REV');
+    // Servo 1 Commands
+    const s1Open = () => sendCommand('S1_OPEN');
+    const s1Close = () => sendCommand('S1_CLOSE');
+    const s1Start = () => sendCommand('S1_START');
+    const s1Stop = () => sendCommand('S1_STOP');
+    const s1TestFwd = () => sendCommand('S1_TEST_FWD');
+    const s1TestRev = () => sendCommand('S1_TEST_REV');
 
-    if (el.topBtnS1Open) el.topBtnS1Open.addEventListener('click', s1OpenHandler);
-    if (el.btnS1Open) el.btnS1Open.addEventListener('click', s1OpenHandler);
-    if (el.topBtnS1Close) el.topBtnS1Close.addEventListener('click', s1CloseHandler);
-    if (el.btnS1Close) el.btnS1Close.addEventListener('click', s1CloseHandler);
-    if (el.topBtnS1Start) el.topBtnS1Start.addEventListener('click', s1StartHandler);
-    if (el.btnS1Start) el.btnS1Start.addEventListener('click', s1StartHandler);
-    if (el.topBtnS1Stop) el.topBtnS1Stop.addEventListener('click', s1StopHandler);
-    if (el.btnS1Stop) el.btnS1Stop.addEventListener('click', s1StopHandler);
-    if (el.topBtnS1TestFwd) el.topBtnS1TestFwd.addEventListener('click', s1TestFwdHandler);
-    if (el.btnS1TestFwd) el.btnS1TestFwd.addEventListener('click', s1TestFwdHandler);
-    if (el.topBtnS1TestRev) el.topBtnS1TestRev.addEventListener('click', s1TestRevHandler);
-    if (el.btnS1TestRev) el.btnS1TestRev.addEventListener('click', s1TestRevHandler);
+    if (el.topBtnS1Open) el.topBtnS1Open.addEventListener('click', s1Open);
+    if (el.btnS1Open) el.btnS1Open.addEventListener('click', s1Open);
+    if (el.topBtnS1Close) el.topBtnS1Close.addEventListener('click', s1Close);
+    if (el.btnS1Close) el.btnS1Close.addEventListener('click', s1Close);
+    if (el.topBtnS1Start) el.topBtnS1Start.addEventListener('click', s1Start);
+    if (el.btnS1Start) el.btnS1Start.addEventListener('click', s1Start);
+    if (el.topBtnS1Stop) el.topBtnS1Stop.addEventListener('click', s1Stop);
+    if (el.btnS1Stop) el.btnS1Stop.addEventListener('click', s1Stop);
+    if (el.topBtnS1TestFwd) el.topBtnS1TestFwd.addEventListener('click', s1TestFwd);
+    if (el.btnS1TestFwd) el.btnS1TestFwd.addEventListener('click', s1TestFwd);
+    if (el.topBtnS1TestRev) el.topBtnS1TestRev.addEventListener('click', s1TestRev);
+    if (el.btnS1TestRev) el.btnS1TestRev.addEventListener('click', s1TestRev);
 
-    // Servo 2 Commands (Top Deck & Panel)
-    const s2OpenHandler = () => sendCommand('S2_OPEN');
-    const s2CloseHandler = () => sendCommand('S2_CLOSE');
-    const s2StartHandler = () => sendCommand('S2_START');
-    const s2StopHandler = () => sendCommand('S2_STOP');
-    const s2TestFwdHandler = () => sendCommand('S2_TEST_FWD');
-    const s2TestRevHandler = () => sendCommand('S2_TEST_REV');
+    // Servo 2 Commands
+    const s2Open = () => sendCommand('S2_OPEN');
+    const s2Close = () => sendCommand('S2_CLOSE');
+    const s2Start = () => sendCommand('S2_START');
+    const s2Stop = () => sendCommand('S2_STOP');
+    const s2TestFwd = () => sendCommand('S2_TEST_FWD');
+    const s2TestRev = () => sendCommand('S2_TEST_REV');
 
-    if (el.topBtnS2Open) el.topBtnS2Open.addEventListener('click', s2OpenHandler);
-    if (el.btnS2Open) el.btnS2Open.addEventListener('click', s2OpenHandler);
-    if (el.topBtnS2Close) el.topBtnS2Close.addEventListener('click', s2CloseHandler);
-    if (el.btnS2Close) el.btnS2Close.addEventListener('click', s2CloseHandler);
-    if (el.topBtnS2Start) el.topBtnS2Start.addEventListener('click', s2StartHandler);
-    if (el.btnS2Start) el.btnS2Start.addEventListener('click', s2StartHandler);
-    if (el.topBtnS2Stop) el.topBtnS2Stop.addEventListener('click', s2StopHandler);
-    if (el.btnS2Stop) el.btnS2Stop.addEventListener('click', s2StopHandler);
-    if (el.topBtnS2TestFwd) el.topBtnS2TestFwd.addEventListener('click', s2TestFwdHandler);
-    if (el.btnS2TestFwd) el.btnS2TestFwd.addEventListener('click', s2TestFwdHandler);
-    if (el.topBtnS2TestRev) el.topBtnS2TestRev.addEventListener('click', s2TestRevHandler);
-    if (el.btnS2TestRev) el.btnS2TestRev.addEventListener('click', s2TestRevHandler);
+    if (el.topBtnS2Open) el.topBtnS2Open.addEventListener('click', s2Open);
+    if (el.btnS2Open) el.btnS2Open.addEventListener('click', s2Open);
+    if (el.topBtnS2Close) el.topBtnS2Close.addEventListener('click', s2Close);
+    if (el.btnS2Close) el.btnS2Close.addEventListener('click', s2Close);
+    if (el.topBtnS2Start) el.topBtnS2Start.addEventListener('click', s2Start);
+    if (el.btnS2Start) el.btnS2Start.addEventListener('click', s2Start);
+    if (el.topBtnS2Stop) el.topBtnS2Stop.addEventListener('click', s2Stop);
+    if (el.btnS2Stop) el.btnS2Stop.addEventListener('click', s2Stop);
+    if (el.topBtnS2TestFwd) el.topBtnS2TestFwd.addEventListener('click', s2TestFwd);
+    if (el.btnS2TestFwd) el.btnS2TestFwd.addEventListener('click', s2TestFwd);
+    if (el.topBtnS2TestRev) el.topBtnS2TestRev.addEventListener('click', s2TestRev);
+    if (el.btnS2TestRev) el.btnS2TestRev.addEventListener('click', s2TestRev);
+
+    // Servo 3 Commands
+    const s3Open = () => sendCommand('S3_OPEN');
+    const s3Close = () => sendCommand('S3_CLOSE');
+    const s3Start = () => sendCommand('S3_START');
+    const s3Stop = () => sendCommand('S3_STOP');
+    const s3TestFwd = () => sendCommand('S3_TEST_FWD');
+    const s3TestRev = () => sendCommand('S3_TEST_REV');
+
+    if (el.topBtnS3Open) el.topBtnS3Open.addEventListener('click', s3Open);
+    if (el.btnS3Open) el.btnS3Open.addEventListener('click', s3Open);
+    if (el.topBtnS3Close) el.topBtnS3Close.addEventListener('click', s3Close);
+    if (el.btnS3Close) el.btnS3Close.addEventListener('click', s3Close);
+    if (el.topBtnS3Start) el.topBtnS3Start.addEventListener('click', s3Start);
+    if (el.btnS3Start) el.btnS3Start.addEventListener('click', s3Start);
+    if (el.topBtnS3Stop) el.topBtnS3Stop.addEventListener('click', s3Stop);
+    if (el.btnS3Stop) el.btnS3Stop.addEventListener('click', s3Stop);
+    if (el.topBtnS3TestFwd) el.topBtnS3TestFwd.addEventListener('click', s3TestFwd);
+    if (el.btnS3TestFwd) el.btnS3TestFwd.addEventListener('click', s3TestFwd);
+    if (el.topBtnS3TestRev) el.topBtnS3TestRev.addEventListener('click', s3TestRev);
+    if (el.btnS3TestRev) el.btnS3TestRev.addEventListener('click', s3TestRev);
+
+    // Servo 4 Commands
+    const s4Open = () => sendCommand('S4_OPEN');
+    const s4Close = () => sendCommand('S4_CLOSE');
+    const s4Start = () => sendCommand('S4_START');
+    const s4Stop = () => sendCommand('S4_STOP');
+    const s4TestFwd = () => sendCommand('S4_TEST_FWD');
+    const s4TestRev = () => sendCommand('S4_TEST_REV');
+
+    if (el.topBtnS4Open) el.topBtnS4Open.addEventListener('click', s4Open);
+    if (el.btnS4Open) el.btnS4Open.addEventListener('click', s4Open);
+    if (el.topBtnS4Close) el.topBtnS4Close.addEventListener('click', s4Close);
+    if (el.btnS4Close) el.btnS4Close.addEventListener('click', s4Close);
+    if (el.topBtnS4Start) el.topBtnS4Start.addEventListener('click', s4Start);
+    if (el.btnS4Start) el.btnS4Start.addEventListener('click', s4Start);
+    if (el.topBtnS4Stop) el.topBtnS4Stop.addEventListener('click', s4Stop);
+    if (el.btnS4Stop) el.btnS4Stop.addEventListener('click', s4Stop);
+    if (el.topBtnS4TestFwd) el.topBtnS4TestFwd.addEventListener('click', s4TestFwd);
+    if (el.btnS4TestFwd) el.btnS4TestFwd.addEventListener('click', s4TestFwd);
+    if (el.topBtnS4TestRev) el.topBtnS4TestRev.addEventListener('click', s4TestRev);
+    if (el.btnS4TestRev) el.btnS4TestRev.addEventListener('click', s4TestRev);
 
     // IR Bowl Detection Controls
     if (el.btnIrReset) {
@@ -874,26 +1049,12 @@
       });
     }
 
-    [
-      { btn: el.btnAutoOff, mode: 0, label: 'TẮT TỰ ĐỘNG' },
-      { btn: el.btnAutoS1, mode: 1, label: 'TỰ ĐỘNG MỞ SERVO 1' },
-      { btn: el.btnAutoS2, mode: 2, label: 'TỰ ĐỘNG MỞ SERVO 2' },
-      { btn: el.btnAutoBoth, mode: 3, label: 'TỰ ĐỘNG MỞ CẢ 2 SERVO' }
-    ].forEach(item => {
-      if (item.btn) {
-        item.btn.addEventListener('click', () => {
-          sendCommand(`IR_AUTO ${item.mode}`);
-          showToast(`Chế độ cảm biến: ${item.label}`, 'success');
-        });
-      }
-    });
-
     // Hard Reboot
     if (el.btnReboot) {
       el.btnReboot.addEventListener('click', () => {
-        if (confirm('Bạn có chắc muốn Reset phần cứng ESP32-S3 qua DTR/RTS?')) {
+        if (confirm('Bạn có chắc muốn Reset phần cứng ESP32 qua DTR/RTS?')) {
           fetch('/api/reboot', { method: 'POST' });
-          showToast('Đã gửi tín hiệu Hard Reset đến ESP32-S3', 'info');
+          showToast('Đã gửi tín hiệu Hard Reset đến ESP32', 'info');
         }
       });
     }
@@ -940,60 +1101,124 @@
       });
     }
 
-    // Config Tab Switching
-    if (el.tabBtnS1 && el.tabBtnS2) {
-      el.tabBtnS1.addEventListener('click', () => {
-        el.tabBtnS1.classList.add('active');
-        el.tabBtnS2.classList.remove('active');
-        el.cfgPaneS1.style.display = 'block';
-        el.cfgPaneS2.style.display = 'none';
-      });
-      el.tabBtnS2.addEventListener('click', () => {
-        el.tabBtnS2.classList.add('active');
-        el.tabBtnS1.classList.remove('active');
-        el.cfgPaneS2.style.display = 'block';
-        el.cfgPaneS1.style.display = 'none';
+    // Stop Slider Calibration S3
+    if (el.sliderStop3) {
+      el.sliderStop3.addEventListener('input', (e) => {
+        if (el.s3CalibValDisplay) el.s3CalibValDisplay.textContent = `${e.target.value}°`;
       });
     }
+    if (el.btnS3CalibTest) {
+      el.btnS3CalibTest.addEventListener('click', () => {
+        const val = el.sliderStop3.value;
+        sendCommand(`S3_CALIB ${val}`);
+        showToast(`Đang test điểm dừng S3: ${val}°`, 'info');
+      });
+    }
+    if (el.btnS3CalibSave) {
+      el.btnS3CalibSave.addEventListener('click', () => {
+        const val = el.sliderStop3.value;
+        sendCommand(`CONFIG_SET stop3=${val}`);
+        showToast(`Đã lưu điểm dừng S3: ${val}° vào NVS Flash`, 'success');
+      });
+    }
+
+    // Stop Slider Calibration S4
+    if (el.sliderStop4) {
+      el.sliderStop4.addEventListener('input', (e) => {
+        if (el.s4CalibValDisplay) el.s4CalibValDisplay.textContent = `${e.target.value}°`;
+      });
+    }
+    if (el.btnS4CalibTest) {
+      el.btnS4CalibTest.addEventListener('click', () => {
+        const val = el.sliderStop4.value;
+        sendCommand(`S4_CALIB ${val}`);
+        showToast(`Đang test điểm dừng S4: ${val}°`, 'info');
+      });
+    }
+    if (el.btnS4CalibSave) {
+      el.btnS4CalibSave.addEventListener('click', () => {
+        const val = el.sliderStop4.value;
+        sendCommand(`CONFIG_SET stop4=${val}`);
+        showToast(`Đã lưu điểm dừng S4: ${val}° vào NVS Flash`, 'success');
+      });
+    }
+
+    // Config Tab Switching
+    function selectTab(idx) {
+      [el.tabBtnS1, el.tabBtnS2, el.tabBtnS3, el.tabBtnS4].forEach((b, i) => {
+        if (b) {
+          if (i === idx) b.classList.add('active');
+          else b.classList.remove('active');
+        }
+      });
+      [el.cfgPaneS1, el.cfgPaneS2, el.cfgPaneS3, el.cfgPaneS4].forEach((p, i) => {
+        if (p) p.style.display = (i === idx) ? 'block' : 'none';
+      });
+    }
+
+    if (el.tabBtnS1) el.tabBtnS1.addEventListener('click', () => selectTab(0));
+    if (el.tabBtnS2) el.tabBtnS2.addEventListener('click', () => selectTab(1));
+    if (el.tabBtnS3) el.tabBtnS3.addEventListener('click', () => selectTab(2));
+    if (el.tabBtnS4) el.tabBtnS4.addEventListener('click', () => selectTab(3));
 
     // Form value bubble bindings
     if (el.cfgFwdSpeed1) el.cfgFwdSpeed1.addEventListener('input', (e) => el.cfgFwdSpeedVal1.textContent = e.target.value);
     if (el.cfgRevSpeed1) el.cfgRevSpeed1.addEventListener('input', (e) => el.cfgRevSpeedVal1.textContent = e.target.value);
     if (el.cfgFwdSpeed2) el.cfgFwdSpeed2.addEventListener('input', (e) => el.cfgFwdSpeedVal2.textContent = e.target.value);
     if (el.cfgRevSpeed2) el.cfgRevSpeed2.addEventListener('input', (e) => el.cfgRevSpeedVal2.textContent = e.target.value);
+    if (el.cfgFwdSpeed3) el.cfgFwdSpeed3.addEventListener('input', (e) => el.cfgFwdSpeedVal3.textContent = e.target.value);
+    if (el.cfgRevSpeed3) el.cfgRevSpeed3.addEventListener('input', (e) => el.cfgRevSpeedVal3.textContent = e.target.value);
+    if (el.cfgFwdSpeed4) el.cfgFwdSpeed4.addEventListener('input', (e) => el.cfgFwdSpeedVal4.textContent = e.target.value);
+    if (el.cfgRevSpeed4) el.cfgRevSpeed4.addEventListener('input', (e) => el.cfgRevSpeedVal4.textContent = e.target.value);
 
-    // Save All Config Form (S1 & S2)
+    // Save All Config Form (S1 - S4)
     if (el.configForm) {
       el.configForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        const stop1 = el.sliderStop1 ? el.sliderStop1.value : state.s1.stop;
-        const fwd1 = el.cfgFwdSpeed1.value;
-        const rev1 = el.cfgRevSpeed1.value;
-        const fwdMs1 = el.cfgFwdMs1.value;
-        const revMs1 = el.cfgRevMs1.value;
-        const pauseMs1 = el.cfgPauseMs1.value;
-        const cyc1 = el.cfgCycles1.value;
+        const s1_stop = el.sliderStop1 ? el.sliderStop1.value : state.s1.stop;
+        const s1_fwd = el.cfgFwdSpeed1 ? el.cfgFwdSpeed1.value : 110;
+        const s1_rev = el.cfgRevSpeed1 ? el.cfgRevSpeed1.value : 70;
+        const s1_fwdMs = el.cfgFwdMs1 ? el.cfgFwdMs1.value : 1000;
+        const s1_revMs = el.cfgRevMs1 ? el.cfgRevMs1.value : 1000;
+        const s1_pauseMs = el.cfgPauseMs1 ? el.cfgPauseMs1.value : 500;
+        const s1_cyc = el.cfgCycles1 ? el.cfgCycles1.value : 1;
 
-        const stop2 = el.sliderStop2 ? el.sliderStop2.value : state.s2.stop;
-        const fwd2 = el.cfgFwdSpeed2.value;
-        const rev2 = el.cfgRevSpeed2.value;
-        const fwdMs2 = el.cfgFwdMs2.value;
-        const revMs2 = el.cfgRevMs2.value;
-        const pauseMs2 = el.cfgPauseMs2.value;
-        const cyc2 = el.cfgCycles2.value;
+        const s2_stop = el.sliderStop2 ? el.sliderStop2.value : state.s2.stop;
+        const s2_fwd = el.cfgFwdSpeed2 ? el.cfgFwdSpeed2.value : 110;
+        const s2_rev = el.cfgRevSpeed2 ? el.cfgRevSpeed2.value : 70;
+        const s2_fwdMs = el.cfgFwdMs2 ? el.cfgFwdMs2.value : 1000;
+        const s2_revMs = el.cfgRevMs2 ? el.cfgRevMs2.value : 1000;
+        const s2_pauseMs = el.cfgPauseMs2 ? el.cfgPauseMs2.value : 500;
+        const s2_cyc = el.cfgCycles2 ? el.cfgCycles2.value : 1;
 
-        const cmd = `CONFIG_SET stop1=${stop1} forward1=${fwd1} reverse1=${rev1} forwardMs1=${fwdMs1} reverseMs1=${revMs1} pauseMs1=${pauseMs1} cycles1=${cyc1} stop2=${stop2} forward2=${fwd2} reverse2=${rev2} forwardMs2=${fwdMs2} reverseMs2=${revMs2} pauseMs2=${pauseMs2} cycles2=${cyc2}`;
+        const s3_stop = el.sliderStop3 ? el.sliderStop3.value : state.s3.stop;
+        const s3_fwd = el.cfgFwdSpeed3 ? el.cfgFwdSpeed3.value : 110;
+        const s3_rev = el.cfgRevSpeed3 ? el.cfgRevSpeed3.value : 70;
+        const s3_fwdMs = el.cfgFwdMs3 ? el.cfgFwdMs3.value : 1000;
+        const s3_revMs = el.cfgRevMs3 ? el.cfgRevMs3.value : 1000;
+        const s3_pauseMs = el.cfgPauseMs3 ? el.cfgPauseMs3.value : 500;
+        const s3_cyc = el.cfgCycles3 ? el.cfgCycles3.value : 1;
+
+        const s4_stop = el.sliderStop4 ? el.sliderStop4.value : state.s4.stop;
+        const s4_fwd = el.cfgFwdSpeed4 ? el.cfgFwdSpeed4.value : 110;
+        const s4_rev = el.cfgRevSpeed4 ? el.cfgRevSpeed4.value : 70;
+        const s4_fwdMs = el.cfgFwdMs4 ? el.cfgFwdMs4.value : 1000;
+        const s4_revMs = el.cfgRevMs4 ? el.cfgRevMs4.value : 1000;
+        const s4_pauseMs = el.cfgPauseMs4 ? el.cfgPauseMs4.value : 500;
+        const s4_cyc = el.cfgCycles4 ? el.cfgCycles4.value : 1;
+
+        const cmd = `CONFIG_SET stop1=${s1_stop} forward1=${s1_fwd} reverse1=${s1_rev} forwardMs1=${s1_fwdMs} reverseMs1=${s1_revMs} pauseMs1=${s1_pauseMs} cycles1=${s1_cyc} stop2=${s2_stop} forward2=${s2_fwd} reverse2=${s2_rev} forwardMs2=${s2_fwdMs} reverseMs2=${s2_revMs} pauseMs2=${s2_pauseMs} cycles2=${s2_cyc} stop3=${s3_stop} forward3=${s3_fwd} reverse3=${s3_rev} forwardMs3=${s3_fwdMs} reverseMs3=${s3_revMs} pauseMs3=${s3_pauseMs} cycles3=${s3_cyc} stop4=${s4_stop} forward4=${s4_fwd} reverse4=${s4_rev} forwardMs4=${s4_fwdMs} reverseMs4=${s4_revMs} pauseMs4=${s4_pauseMs} cycles4=${s4_cyc}`;
         sendCommand(cmd);
-        showToast('Đã lưu toàn bộ cấu hình Servo 1 & Servo 2 vào NVS Flash', 'success');
+        showToast('Đã lưu toàn bộ cấu hình 4 Servo (S1 - S4) vào NVS Flash', 'success');
       });
     }
 
     // Reset Defaults
     if (el.btnResetConfig) {
       el.btnResetConfig.addEventListener('click', () => {
-        if (confirm('Khôi phục cấu hình mặc định ban đầu cho cả 2 Servo?')) {
+        if (confirm('Khôi phục cấu hình mặc định ban đầu cho cả 4 Servo?')) {
           sendCommand('RESET');
-          showToast('Đã khôi phục cấu hình mặc định cả 2 Servo', 'info');
+          showToast('Đã khôi phục cấu hình mặc định cả 4 Servo', 'info');
         }
       });
     }
@@ -1003,7 +1228,7 @@
       el.btnRunHil.addEventListener('click', () => {
         fetch('/api/run-hil', { method: 'POST' })
           .then(res => res.json())
-          .then(() => showToast('Đang thực thi HIL Test Suite trên COM3...', 'info'))
+          .then(() => showToast('Đang thực thi HIL Test Suite trên COM5...', 'info'))
           .catch(err => showToast('Lỗi: ' + err.message, 'error'));
       });
     }
@@ -1036,7 +1261,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     connectWebSocket();
     initEventListeners();
-    requestAnimationFrame(renderDualGauges);
+    requestAnimationFrame(renderQuadGauges);
   });
 
 })();

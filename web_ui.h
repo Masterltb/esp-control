@@ -1,716 +1,328 @@
-#pragma once
+﻿#pragma once
 #include <Arduino.h>
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
-
 <!DOCTYPE html>
-
 <html lang="vi">
-
 <head>
-
 <meta charset="UTF-8">
-
 <meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>ESP32 Control Center</title>
-
+<title>ESP32 Quad Servo Control Center</title>
 <style>
-
 *{box-sizing:border-box}
-
-body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f3f4f6;color:#111827}
-
-header{background:#111827;color:#fff;padding:18px}
-
-header h1{margin:0;font-size:21px}
-
-header p{margin:5px 0 0;color:#9ca3af;font-size:13px}
-
-nav{display:flex;overflow-x:auto;gap:8px;padding:10px;background:#fff;border-bottom:1px solid #ddd}
-
-nav button{border:0;padding:10px 14px;border-radius:8px;background:#e5e7eb;white-space:nowrap;cursor:pointer}
-
-nav button.active{background:#111827;color:#fff}
-
-main{max-width:900px;margin:auto;padding:15px}
-
+body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0b0f19;color:#e5e7eb}
+header{background:#111827;color:#fff;padding:16px 20px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+header h1{margin:0;font-size:20px;color:#00f2fe;font-weight:700;letter-spacing:.5px}
+header p{margin:4px 0 0;color:#9ca3af;font-size:12px}
+.badge-live{background:#064e3b;color:#34d399;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.pulse{width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 1.5s infinite}
+@keyframes pulse{0%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}100%{opacity:1;transform:scale(1)}}
+nav{display:flex;overflow-x:auto;gap:8px;padding:10px 16px;background:#131b2e;border-bottom:1px solid #1f2937}
+nav button{border:1px solid #1f2937;padding:8px 16px;border-radius:6px;background:#1e293b;color:#94a3b8;white-space:nowrap;cursor:pointer;font-size:13px;font-weight:600;transition:.2s}
+nav button.active{background:#00f2fe;color:#0b0f19;border-color:#00f2fe}
+main{max-width:1050px;margin:auto;padding:16px}
 .section{display:none}.section.active{display:block}
-
-.card{background:#fff;border-radius:12px;padding:18px;margin-bottom:15px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-
-.card h2{margin-top:0;font-size:18px}
-
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-
-label{display:block;font-size:13px;margin-bottom:6px;color:#4b5563}
-
-input{width:100%;padding:11px;border:1px solid #d1d5db;border-radius:8px;font-size:15px}
-
-input:focus{outline:2px solid #93c5fd;border-color:#2563eb}
-
-button.action{border:0;border-radius:8px;padding:11px 16px;cursor:pointer;margin:4px;font-weight:600}
-
-button:disabled{opacity:.55;cursor:not-allowed}
-
-.primary{background:#2563eb;color:#fff}.success{background:#16a34a;color:#fff}.warning{background:#f59e0b;color:#fff}.danger{background:#dc2626;color:#fff}.secondary{background:#e5e7eb;color:#111827}
-
-.status{font-size:20px;font-weight:bold;margin-bottom:10px}.status-box{padding:15px;background:#f9fafb;border-radius:10px}
-
-.warning-box{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:12px;border-radius:8px;margin-top:10px;font-size:13px}
-
-.success-box{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;padding:12px;border-radius:8px;margin-top:10px;font-size:13px}
-
-.error-box{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:12px;border-radius:8px;margin-top:10px;font-size:13px;display:none}
-
-.progress{width:100%;height:15px;background:#e5e7eb;border-radius:10px;overflow:hidden}.progress-bar{height:100%;width:0%;background:#2563eb;transition:width .3s}
-
-.small{font-size:13px;color:#6b7280}.value{font-size:25px;font-weight:bold}
-
-.unsaved{display:none;margin:10px 0 0;color:#b45309;font-weight:600;font-size:13px}
-
+.card{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:18px;margin-bottom:16px;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.card h2{margin-top:0;font-size:16px;color:#38bdf8;border-bottom:1px solid #1f2937;padding-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.stat-box{background:#182234;border:1px solid #233148;border-radius:8px;padding:14px}
+.stat-tag{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.stat-val{font-size:16px;font-weight:700;margin:6px 0 2px;color:#f8fafc}
+.stat-sub{font-size:11px;color:#64748b}
+.btn-deck{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.btn{border:none;padding:10px 14px;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;transition:.15s;display:inline-flex;align-items:center;gap:6px}
+.btn-primary{background:#0284c7;color:#fff}.btn-primary:hover{background:#0369a1}
+.btn-success{background:#059669;color:#fff}.btn-success:hover{background:#047857}
+.btn-warning{background:#d97706;color:#fff}.btn-warning:hover{background:#b45309}
+.btn-danger{background:#dc2626;color:#fff}.btn-danger:hover{background:#b91c1c}
+.btn-purple{background:#7c3aed;color:#fff}.btn-purple:hover{background:#6d28d9}
+.btn-dark{background:#334155;color:#e2e8f0}.btn-dark:hover{background:#475569}
+.btn-dispense{background:linear-gradient(135deg,#059669,#0284c7);color:#fff;padding:12px 18px;font-size:13px;border-radius:8px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+label{display:block;font-size:11px;color:#94a3b8;margin-bottom:4px;font-weight:600}
+input{width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#f8fafc;font-size:13px}
+input:focus{outline:none;border-color:#00f2fe}
+.col-header{padding:8px 12px;border-radius:6px;margin-bottom:10px;font-weight:700;font-size:13px}
+.col-header-1{background:rgba(2,132,199,.2);color:#38bdf8;border-left:4px solid #0284c7}
+.col-header-2{background:rgba(5,150,105,.2);color:#34d399;border-left:4px solid #059669}
 </style>
-
 </head>
-
 <body>
-
 <header>
-
-<h1>ESP32 CONTROL CENTER</h1>
-
-<p>Điều khiển Servo 360° và màn hình LCD</p>
-
+  <div>
+    <h1>ESP32 QUAD SERVO & VENDING CENTER</h1>
+    <p>Dieu khien 4 Servo (2 Cot Vending FIFO) - Active Ground Clamping 0V</p>
+  </div>
+  <div class="badge-live"><span class="pulse"></span> ONLINE <span id="hdr-ip">192.168.4.1</span></div>
 </header>
-
 <nav>
-
-<button onclick="showTab('overview')" id="nav-overview">🎮 Bàn điều khiển (Motion Deck)</button>
-
-<button onclick="showTab('servo')" id="nav-servo">⚙️ Servo</button>
-
-<button onclick="showTab('motion')" id="nav-motion">▶️ Chuyển động</button>
-
-<button onclick="showTab('calibration')" id="nav-calibration">🔧 Hiệu chỉnh</button>
-
-<button onclick="showTab('profiles')" id="nav-profiles">📁 Hồ sơ</button>
-
-<button onclick="showTab('network')" id="nav-network">📡 Mạng</button>
-
-<button onclick="showTab('system')" id="nav-system">🖥️ Hệ thống</button>
-
+  <button class="active" onclick="showTab('tab-overview')">Tong Quan</button>
+  <button onclick="showTab('tab-action')">Ban Dieu Khien</button>
+  <button onclick="showTab('tab-config')">Cau Hinh NVS</button>
 </nav>
-
 <main>
-
-<section id="overview" class="section active">
-
-<div class="card">
-<h2>🎮 ĐIỀU KHIỂN ĐỒNG THỜI (DUAL SERVO MASTER)</h2>
-<p class="small">Lệnh thực thi đồng thời trên cả 2 Servo (GPIO 1 & GPIO 2):</p>
-<button class="action primary" onclick="openAll()">🚪 MỞ CẢ 2 SERVO</button>
-<button class="action warning" onclick="closeAll()">🔒 ĐÓNG CẢ 2 SERVO</button>
-<button class="action success" onclick="startAll()">▶️ BẮT ĐẦU CẢ 2 CHU KỲ</button>
-<button class="action danger" onclick="stopAll()">⏹️ DỪNG TẤT CẢ (STOP ALL)</button>
-</div>
-
-<div class="card" style="border-left: 5px solid #10b981;">
-<h2>🟢 BÀN ĐIỀU KHIỂN SERVO 1 (GPIO 1)</h2>
-<div class="status-box">
-<div>Trạng thái: <strong id="state1">Sẵn sàng</strong> | Chu kỳ: <strong><span id="cycle1">0</span> / <span id="cycles1">1</span></strong></div>
-</div>
-<button id="btnOpen1" class="action primary" onclick="openDoor1()">🚪 MỞ S1 (Không xoay về)</button>
-<button id="btnClose1" class="action warning" onclick="closeDoor1()">🔒 ĐÓNG S1 (Về ban đầu)</button>
-<button id="btnStart1" class="action success" onclick="startMotion1()">▶️ Bắt đầu chu kỳ S1</button>
-<button id="btnStop1" class="action danger" onclick="stopMotion1()">⏹️ Dừng S1</button>
-<button id="btnTestFwd1" class="action secondary" onclick="testForward1()">↻ Test Thuận S1</button>
-<button id="btnTestRev1" class="action secondary" onclick="testReverse1()">↺ Test Nghịch S1</button>
-</div>
-
-<div class="card" style="border-left: 5px solid #00f2fe;">
-<h2>🔵 BÀN ĐIỀU KHIỂN SERVO 2 (GPIO 2)</h2>
-<div class="status-box">
-<div>Trạng thái: <strong id="state2">Sẵn sàng</strong> | Chu kỳ: <strong><span id="cycle2">0</span> / <span id="cycles2">1</span></strong></div>
-</div>
-<button id="btnOpen2" class="action primary" onclick="openDoor2()">🚪 MỞ S2 (Không xoay về)</button>
-<button id="btnClose2" class="action warning" onclick="closeDoor2()">🔒 ĐÓNG S2 (Về ban đầu)</button>
-<button id="btnStart2" class="action success" onclick="startMotion2()">▶️ Bắt đầu chu kỳ S2</button>
-<button id="btnStop2" class="action danger" onclick="stopMotion2()">⏹️ Dừng S2</button>
-<button id="btnTestFwd2" class="action secondary" onclick="testForward2()">↻ Test Thuận S2</button>
-<button id="btnTestRev2" class="action secondary" onclick="testReverse2()">↺ Test Nghịch S2</button>
-</div>
-
-<div class="card">
-<h2>Trạng thái hệ thống chung</h2>
-<div class="status-box">
-<div id="state" class="status">Đang tải...</div>
-<div>Tổng chu kỳ: <strong><span id="cycle">0</span> / <span id="cycles">0</span></strong></div>
-<br><div class="progress"><div id="progress" class="progress-bar"></div></div>
-</div>
-<div class="warning-box">⚠️ Nút Dừng trên giao diện kích hoạt <strong>ngắt PWM và Clamp LOW</strong> chống trôi motor.</div>
-<div id="errorBox" class="error-box"></div>
-</div>
-
-</section>
-
-
-
-<section id="servo" class="section">
-
-<div class="card">
-
-<h2>⚙️ Cấu hình Servo</h2>
-
-<div class="grid">
-
-<div><label>GPIO Servo</label><input id="servoPin" type="number" value="1" disabled></div>
-
-<div><label>Điểm dừng</label><input id="servoStop" type="number" min="0" max="180"></div>
-
-<div><label>Mức điều khiển chiều thuận</label><input id="servoForward" type="number" min="0" max="180"></div>
-
-<div><label>Mức điều khiển chiều nghịch</label><input id="servoReverse" type="number" min="0" max="180"></div>
-
-</div>
-
-<div id="servoUnsaved" class="unsaved">● Có thay đổi chưa lưu</div>
-
-<br><button class="action primary" onclick="saveConfig()">💾 Lưu cấu hình</button>
-
-</div>
-
-<div class="card">
-
-<h2>🧪 Chạy thử thủ công</h2>
-
-<button id="manualForward" class="action success" onclick="testForward()">↻ Quay thuận</button>
-
-<button id="manualReverse" class="action warning" onclick="testReverse()">↺ Quay nghịch</button>
-
-<button class="action danger" onclick="stopMotion()">⏹️ Dừng</button>
-
-</div>
-
-</section>
-
-
-
-<section id="motion" class="section">
-
-<div class="card">
-
-<h2>▶️ Cấu hình chuyển động</h2>
-
-<div class="grid">
-
-<div><label>Thời gian quay thuận (ms)</label><input id="forwardMs" type="number" min="1" max="600000"></div>
-
-<div><label>Thời gian quay nghịch (ms)</label><input id="reverseMs" type="number" min="1" max="600000"></div>
-
-<div><label>Thời gian dừng giữa chiều (ms)</label><input id="pauseMs" type="number" min="0" max="600000"></div>
-
-<div><label>Số chu kỳ</label><input id="cyclesInput" type="number" min="1" max="1000"></div>
-
-</div>
-
-<div id="motionUnsaved" class="unsaved">● Có thay đổi chưa lưu</div>
-
-<br><button class="action primary" onclick="saveConfig()">💾 Lưu cấu hình</button>
-
-</div>
-
-<div class="card">
-
-<h2>Định nghĩa một chu kỳ</h2>
-
-<p><strong>Thuận → Dừng → Nghịch → Dừng</strong></p>
-
-<p class="small">Ví dụ: 3 chu kỳ nghĩa là Servo thực hiện 3 lần chuyển động thuận và nghịch.</p>
-
-</div>
-
-</section>
-
-
-
-<section id="calibration" class="section">
-
-<div class="card">
-
-<h2>🔧 Hiệu chỉnh điểm dừng</h2>
-
-<p>Tìm giá trị mà Servo 360° đứng yên hoàn toàn.</p>
-
-<div class="value"><span id="calibrationValue">90</span></div>
-
-<button class="action secondary" onclick="calibrate(-1)">−1</button>
-
-<button class="action primary" onclick="calibrate(0)">🧪 Kiểm tra</button>
-
-<button class="action secondary" onclick="calibrate(1)">+1</button>
-
-<p class="small">Giá trị mới chỉ áp dụng để thử. Sau khi tìm được điểm dừng thật sự, nhấn <strong>Lưu cấu hình</strong> ở tab Servo để ghi vào bộ nhớ ESP32.</p>
-
-</div>
-
-<div class="card">
-
-<h2>📐 Quan hệ thời gian → số răng</h2>
-
-<p>Cơ cấu hiện tại: bánh nhỏ <strong>20 răng</strong>, bánh lớn <strong>80 răng</strong>, tỷ số truyền <strong>4:1</strong>.</p>
-
-<p>Bánh nhỏ quay 90° sẽ làm bánh lớn quay khoảng 22,5°.</p>
-
-<p class="small">Vì Servo là loại 360° liên tục, thời gian quay phải được thực nghiệm và hiệu chỉnh; không thể xem thời gian là góc tuyệt đối.</p>
-
-</div>
-
-</section>
-
-
-
-<section id="profiles" class="section">
-
-<div class="card">
-
-<h2>📁 Hồ sơ cấu hình</h2>
-
-<p>Phiên bản hiện tại lưu cấu hình trực tiếp trên ESP32.</p>
-
-<button class="action primary" onclick="saveConfig()">💾 Lưu cấu hình hiện tại</button>
-
-</div>
-
-<div class="card"><h2>Hồ sơ đề xuất</h2><ul><li>Fruit Bowl Default</li><li>Chạy nhanh</li><li>Chạy chậm</li><li>Hiệu chỉnh</li><li>Kiểm tra Servo</li></ul></div>
-
-</section>
-
-
-
-<section id="network" class="section">
-
-<div class="card"><h2>📡 Mạng Wi-Fi</h2><div class="status-box"><p>SSID: <strong>ESP32-Servo</strong></p><p>Địa chỉ IP: <strong id="ip">192.168.4.1</strong></p><p>Trạng thái: <strong>Đang phát Wi-Fi</strong></p></div></div>
-
-</section>
-
-
-
-<section id="system" class="section">
-
-<div class="card"><h2>🖥️ Hệ thống</h2><p>Thiết bị: <strong>LILYGO T-Display-S3</strong></p><p>Firmware: <strong>ESP32 Servo Control</strong></p><p>Servo GPIO: <strong>GPIO 1</strong></p><p>Web Server: <strong>ESP32 WebServer</strong></p></div>
-
-<div class="card"><h2>⚙️ Cấu hình hệ thống</h2><p>Khôi phục toàn bộ tham số Servo và chuyển động về mặc định của firmware.</p><button class="action danger" onclick="factoryReset()">♻️ Khôi phục mặc định</button></div>
-<div class="card"><h2>⚠️ An toàn</h2><p>Servo và cơ cấu bánh răng có thể gây kẹt tay hoặc gây hư hỏng cơ khí.</p><p>Luôn giữ tay khỏi bánh răng khi đang chạy.</p><p>Đối với máy thực tế, cần bổ sung <strong>nút dừng khẩn cấp vật lý</strong>.</p></div>
-
-</section>
-
+  <!-- TAB OVERVIEW -->
+  <div id="tab-overview" class="section active">
+    <!-- Vending Dispenser Status -->
+    <div class="card">
+      <h2>BO NHA TO BAN HANG TU DONG (FIFO DUAL-COLUMN)</h2>
+      <div class="grid-2">
+        <div class="stat-box">
+          <div class="col-header col-header-1">COT 1: TAO (APPLE)</div>
+          <div class="stat-tag">Trang thai nha to:</div>
+          <div class="stat-val" id="col1-state">San sang</div>
+          <div class="stat-sub">S1(GPIO 1 - Duoi) & S2(GPIO 2 - Tren)</div>
+          <div style="margin-top:10px">
+            <button class="btn btn-dispense" onclick="apiCmd('DISPENSE 1')">&#10003; NHA TO COT 1 (FIFO)</button>
+          </div>
+        </div>
+        <div class="stat-box">
+          <div class="col-header col-header-2">COT 2: DUA LUOI (MELON)</div>
+          <div class="stat-tag">Trang thai nha to:</div>
+          <div class="stat-val" id="col2-state">San sang</div>
+          <div class="stat-sub">S3(GPIO 12 - Duoi) & S4(GPIO 13 - Tren)</div>
+          <div style="margin-top:10px">
+            <button class="btn btn-dispense" onclick="apiCmd('DISPENSE 2')">&#10003; NHA TO COT 2 (FIFO)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 Servos Stat Matrix -->
+    <div class="card">
+      <h2>TRANG THAI 4 KENH SERVO</h2>
+      <div class="grid-4">
+        <div class="stat-box">
+          <div class="stat-tag">SERVO 1 (Cot 1 Duoi)</div>
+          <div class="stat-val" id="s1-state">San sang</div>
+          <div class="stat-sub" id="s1-info">Chu ky: 0/1</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-tag">SERVO 2 (Cot 1 Tren)</div>
+          <div class="stat-val" id="s2-state">San sang</div>
+          <div class="stat-sub" id="s2-info">Chu ky: 0/1</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-tag">SERVO 3 (Cot 2 Duoi)</div>
+          <div class="stat-val" id="s3-state">San sang</div>
+          <div class="stat-sub" id="s3-info">Chu ky: 0/1</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-tag">SERVO 4 (Cot 2 Tren)</div>
+          <div class="stat-val" id="s4-state">San sang</div>
+          <div class="stat-sub" id="s4-info">Chu ky: 0/1</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- IR Detector Deck -->
+    <div class="card">
+      <h2>CAM BIEN HONG NGOAI NHAN DIEN TO (GPIO 10)</h2>
+      <div class="grid-2">
+        <div class="stat-box">
+          <div class="stat-tag">Trang thai tia:</div>
+          <div class="stat-val" id="ir-state" style="color:#10b981">THONG SUOT</div>
+          <div class="stat-sub" id="ir-count">Tong to di qua: 0</div>
+        </div>
+        <div class="btn-deck" style="align-items:center">
+          <button class="btn btn-dark" onclick="apiCmd('IR_TRIGGER')">Xung to ao</button>
+          <button class="btn btn-danger" onclick="apiCmd('IR_RESET')">Reset bo dem</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB ACTION DECK -->
+  <div id="tab-action" class="section">
+    <!-- Master Deck -->
+    <div class="card">
+      <h2>DIEU KHIEN DONG THOI TOAN HE THONG (MASTER)</h2>
+      <div class="btn-deck">
+        <button class="btn btn-success" onclick="apiCmd('ALL_OPEN')">Mo Tat Ca (4 Servo)</button>
+        <button class="btn btn-primary" onclick="apiCmd('ALL_CLOSE')">Dong Tat Ca (4 Servo)</button>
+        <button class="btn btn-purple" onclick="apiCmd('ALL_START')">Chay Chu Ky Tat Ca</button>
+        <button class="btn btn-danger" onclick="apiCmd('ALL_STOP')">DUNG KHAN CAP (0V CLAMP)</button>
+      </div>
+    </div>
+
+    <!-- Column 1 Servos -->
+    <div class="card">
+      <h2>COT 1 (TAO) - SERVO 1 (DUOI) & SERVO 2 (TREN)</h2>
+      <div class="col-header col-header-1">SERVO 1 (GPIO 1 / 18 - Cua duoi xa to)</div>
+      <div class="btn-deck">
+        <button class="btn btn-success" onclick="apiCmd('S1_OPEN')">Mo S1</button>
+        <button class="btn btn-primary" onclick="apiCmd('S1_CLOSE')">Dong S1</button>
+        <button class="btn btn-purple" onclick="apiCmd('S1_START')">Chu Ky S1</button>
+        <button class="btn btn-danger" onclick="apiCmd('S1_STOP')">Dung S1</button>
+        <button class="btn btn-dark" onclick="apiCmd('S1_TEST_FWD')">Test Thuan</button>
+        <button class="btn btn-dark" onclick="apiCmd('S1_TEST_REV')">Test Nghich</button>
+      </div>
+      <div class="col-header col-header-1" style="margin-top:14px">SERVO 2 (GPIO 2 / 19 - Cua tren giu/nap to)</div>
+      <div class="btn-deck">
+        <button class="btn btn-success" onclick="apiCmd('S2_OPEN')">Mo S2</button>
+        <button class="btn btn-primary" onclick="apiCmd('S2_CLOSE')">Dong S2</button>
+        <button class="btn btn-purple" onclick="apiCmd('S2_START')">Chu Ky S2</button>
+        <button class="btn btn-danger" onclick="apiCmd('S2_STOP')">Dung S2</button>
+        <button class="btn btn-dark" onclick="apiCmd('S2_TEST_FWD')">Test Thuan</button>
+        <button class="btn btn-dark" onclick="apiCmd('S2_TEST_REV')">Test Nghich</button>
+      </div>
+    </div>
+
+    <!-- Column 2 Servos -->
+    <div class="card">
+      <h2>COT 2 (DUA LUOI) - SERVO 3 (DUOI) & SERVO 4 (TREN)</h2>
+      <div class="col-header col-header-2">SERVO 3 (GPIO 12 / 21 - Cua duoi xa to)</div>
+      <div class="btn-deck">
+        <button class="btn btn-success" onclick="apiCmd('S3_OPEN')">Mo S3</button>
+        <button class="btn btn-primary" onclick="apiCmd('S3_CLOSE')">Dong S3</button>
+        <button class="btn btn-purple" onclick="apiCmd('S3_START')">Chu Ky S3</button>
+        <button class="btn btn-danger" onclick="apiCmd('S3_STOP')">Dung S3</button>
+        <button class="btn btn-dark" onclick="apiCmd('S3_TEST_FWD')">Test Thuan</button>
+        <button class="btn btn-dark" onclick="apiCmd('S3_TEST_REV')">Test Nghich</button>
+      </div>
+      <div class="col-header col-header-2" style="margin-top:14px">SERVO 4 (GPIO 13 / 22 - Cua tren giu/nap to)</div>
+      <div class="btn-deck">
+        <button class="btn btn-success" onclick="apiCmd('S4_OPEN')">Mo S4</button>
+        <button class="btn btn-primary" onclick="apiCmd('S4_CLOSE')">Dong S4</button>
+        <button class="btn btn-purple" onclick="apiCmd('S4_START')">Chu Ky S4</button>
+        <button class="btn btn-danger" onclick="apiCmd('S4_STOP')">Dung S4</button>
+        <button class="btn btn-dark" onclick="apiCmd('S4_TEST_FWD')">Test Thuan</button>
+        <button class="btn btn-dark" onclick="apiCmd('S4_TEST_REV')">Test Nghich</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB CONFIG -->
+  <div id="tab-config" class="section">
+    <div class="card">
+      <h2>CAU HINH THONG SO NVS FLASH (4 SERVO)</h2>
+      <form id="cfg-form" onsubmit="saveConfig(event)">
+        <!-- S1 -->
+        <div class="col-header col-header-1">SERVO 1 (COT 1 DUOI)</div>
+        <div class="form-grid">
+          <div><label>Diem Dung (0-180)</label><input type="number" id="cfg-stop1" value="90"></div>
+          <div><label>Toc Do Thuan (0-180)</label><input type="number" id="cfg-fwd1" value="110"></div>
+          <div><label>Toc Do Nghich (0-180)</label><input type="number" id="cfg-rev1" value="70"></div>
+          <div><label>Thoi Gian Thuan (ms)</label><input type="number" id="cfg-fwdMs1" value="1000"></div>
+          <div><label>Thoi Gian Nghich (ms)</label><input type="number" id="cfg-revMs1" value="1000"></div>
+          <div><label>Thoi Gian Dung (ms)</label><input type="number" id="cfg-pauseMs1" value="500"></div>
+        </div>
+
+        <!-- S2 -->
+        <div class="col-header col-header-1" style="margin-top:14px">SERVO 2 (COT 1 TREN)</div>
+        <div class="form-grid">
+          <div><label>Diem Dung (0-180)</label><input type="number" id="cfg-stop2" value="90"></div>
+          <div><label>Toc Do Thuan (0-180)</label><input type="number" id="cfg-fwd2" value="110"></div>
+          <div><label>Toc Do Nghich (0-180)</label><input type="number" id="cfg-rev2" value="70"></div>
+          <div><label>Thoi Gian Thuan (ms)</label><input type="number" id="cfg-fwdMs2" value="1000"></div>
+          <div><label>Thoi Gian Nghich (ms)</label><input type="number" id="cfg-revMs2" value="1000"></div>
+          <div><label>Thoi Gian Dung (ms)</label><input type="number" id="cfg-pauseMs2" value="500"></div>
+        </div>
+
+        <!-- S3 -->
+        <div class="col-header col-header-2" style="margin-top:14px">SERVO 3 (COT 2 DUOI)</div>
+        <div class="form-grid">
+          <div><label>Diem Dung (0-180)</label><input type="number" id="cfg-stop3" value="90"></div>
+          <div><label>Toc Do Thuan (0-180)</label><input type="number" id="cfg-fwd3" value="110"></div>
+          <div><label>Toc Do Nghich (0-180)</label><input type="number" id="cfg-rev3" value="70"></div>
+          <div><label>Thoi Gian Thuan (ms)</label><input type="number" id="cfg-fwdMs3" value="1000"></div>
+          <div><label>Thoi Gian Nghich (ms)</label><input type="number" id="cfg-revMs3" value="1000"></div>
+          <div><label>Thoi Gian Dung (ms)</label><input type="number" id="cfg-pauseMs3" value="500"></div>
+        </div>
+
+        <!-- S4 -->
+        <div class="col-header col-header-2" style="margin-top:14px">SERVO 4 (COT 2 TREN)</div>
+        <div class="form-grid">
+          <div><label>Diem Dung (0-180)</label><input type="number" id="cfg-stop4" value="90"></div>
+          <div><label>Toc Do Thuan (0-180)</label><input type="number" id="cfg-fwd4" value="110"></div>
+          <div><label>Toc Do Nghich (0-180)</label><input type="number" id="cfg-rev4" value="70"></div>
+          <div><label>Thoi Gian Thuan (ms)</label><input type="number" id="cfg-fwdMs4" value="1000"></div>
+          <div><label>Thoi Gian Nghich (ms)</label><input type="number" id="cfg-revMs4" value="1000"></div>
+          <div><label>Thoi Gian Dung (ms)</label><input type="number" id="cfg-pauseMs4" value="500"></div>
+        </div>
+
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button type="submit" class="btn btn-success">Luu Cau Hinh Vao NVS Flash</button>
+          <button type="button" class="btn btn-danger" onclick="apiCmd('RESET')">Khoi Phuc Mac Dinh</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </main>
 
-
-
 <script>
-
-let configDirty = false;
-
-let lastKnownConfig = null;
-
-
-
-function el(id){ return document.getElementById(id); }
-
-
-
-function showTab(name){
-
-    document.querySelectorAll('.section').forEach(x => x.classList.remove('active'));
-
-    document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
-
-    el(name).classList.add('active');
-
-    el('nav-' + name).classList.add('active');
-
+function showTab(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
 }
 
-
-
-function showError(message){
-
-    const box = el('errorBox');
-
-    box.innerText = message || '';
-
-    box.style.display = message ? 'block' : 'none';
-
+async function apiCmd(cmd) {
+  try {
+    await fetch('/api/cmd', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cmd})
+    });
+    updateStatus();
+  } catch(e) {
+    console.error(e);
+  }
 }
 
-
-
-function setDirty(value){
-
-    configDirty = value;
-
-    el('servoUnsaved').style.display = value ? 'block' : 'none';
-
-    el('motionUnsaved').style.display = value ? 'block' : 'none';
-
+async function saveConfig(e) {
+  e.preventDefault();
+  const params = new URLSearchParams();
+  for (let ch = 1; ch <= 4; ch++) {
+    params.append('stop' + ch, document.getElementById('cfg-stop' + ch).value);
+    params.append('forward' + ch, document.getElementById('cfg-fwd' + ch).value);
+    params.append('reverse' + ch, document.getElementById('cfg-rev' + ch).value);
+    params.append('forwardMs' + ch, document.getElementById('cfg-fwdMs' + ch).value);
+    params.append('reverseMs' + ch, document.getElementById('cfg-revMs' + ch).value);
+    params.append('pauseMs' + ch, document.getElementById('cfg-pauseMs' + ch).value);
+  }
+  await fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: params.toString()
+  });
+  alert('Da luu cau hinh 4 servo vao NVS Flash!');
 }
 
+async function updateStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    if (!data.ok) return;
 
+    if (data.ip) document.getElementById('hdr-ip').innerText = data.ip;
 
-function readForm(){
+    // S1..S4
+    ['s1','s2','s3','s4'].forEach((k) => {
+      if (data[k]) {
+        document.getElementById(k + '-state').innerText = data[k].state || 'San sang';
+        document.getElementById(k + '-info').innerText = 'Chu ky: ' + (data[k].cycle||0) + '/' + (data[k].cycles||1);
+      }
+    });
 
-    return {
+    // Columns
+    if (data.col1) document.getElementById('col1-state').innerText = data.col1.state || 'San sang';
+    if (data.col2) document.getElementById('col2-state').innerText = data.col2.state || 'San sang';
 
-        stop: Number(el('servoStop').value),
-
-        forward: Number(el('servoForward').value),
-
-        reverse: Number(el('servoReverse').value),
-
-        forwardMs: Number(el('forwardMs').value),
-
-        reverseMs: Number(el('reverseMs').value),
-
-        pauseMs: Number(el('pauseMs').value),
-
-        cycles: Number(el('cyclesInput').value)
-
-    };
-
-}
-
-
-
-function validateClientConfig(c){
-
-    if (!Number.isInteger(c.stop) || c.stop < 0 || c.stop > 180) return 'Điểm dừng phải từ 0 đến 180.';
-
-    if (!Number.isInteger(c.forward) || c.forward < 0 || c.forward > 180) return 'Mức thuận phải từ 0 đến 180.';
-
-    if (!Number.isInteger(c.reverse) || c.reverse < 0 || c.reverse > 180) return 'Mức nghịch phải từ 0 đến 180.';
-
-    if (!Number.isInteger(c.forwardMs) || c.forwardMs < 1 || c.forwardMs > 600000) return 'Thời gian thuận phải từ 1 đến 600000 ms.';
-
-    if (!Number.isInteger(c.reverseMs) || c.reverseMs < 1 || c.reverseMs > 600000) return 'Thời gian nghịch phải từ 1 đến 600000 ms.';
-
-    if (!Number.isInteger(c.pauseMs) || c.pauseMs < 0 || c.pauseMs > 600000) return 'Thời gian d�    el('cycles').innerText = data.cycles;
-    el('ip').innerText = data.ip;
-
-    if (data.s1) {
-        if (el('state1')) el('state1').innerText = data.s1.state;
-        if (el('cycle1')) el('cycle1').innerText = data.s1.cycle;
-        if (el('cycles1')) el('cycles1').innerText = data.s1.cycles;
+    // IR
+    if (data.ir) {
+      document.getElementById('ir-state').innerText = data.ir.detected ? 'TO DANG CHAN TIA!' : 'THONG SUOT';
+      document.getElementById('ir-state').style.color = data.ir.detected ? '#ef4444' : '#10b981';
+      document.getElementById('ir-count').innerText = 'Tong to di qua: ' + data.ir.count;
     }
-    if (data.s2) {
-        if (el('state2')) el('state2').innerText = data.s2.state;
-        if (el('cycle2')) el('cycle2').innerText = data.s2.cycle;
-        if (el('cycles2')) el('cycles2').innerText = data.s2.cycles;
-    }
-
-    const percentage = data.cycles > 0
-        ? Math.min(100, Math.max(0, (data.cycle / data.cycles) * 100))
-        : 0;
-    el('progress').style.width = percentage + '%';
-
-    const running1 = data.s1 ? !!data.s1.running : !!data.running;
-    const running2 = data.s2 ? !!data.s2.running : false;
-
-    if (el('btnOpen1')) el('btnOpen1').disabled = running1;
-    if (el('btnClose1')) el('btnClose1').disabled = running1;
-    if (el('btnStart1')) el('btnStart1').disabled = running1;
-
-    if (el('btnOpen2')) el('btnOpen2').disabled = running2;
-    if (el('btnClose2')) el('btnClose2').disabled = running2;
-    if (el('btnStart2')) el('btnStart2').disabled = running2;
+  } catch(e) {}
 }
-
-async function apiRequest(url, options = {}){
-    const response = await fetch(url, options);
-    let data = {};
-    try { data = await response.json(); } catch (_) {}
-    if (!response.ok || data.ok === false) {
-        throw new Error(data.error || ('HTTP ' + response.status));
-    }
-    return data;
-}
-
-let isPolling = false;
-
-async function updateStatus(){
-    if (isPolling) return;
-    isPolling = true;
-
-    try{
-        const data = await apiRequest('/api/status');
-        updateStatusFields(data);
-
-        if (!configDirty) {
-            applyConfigToForm(data);
-        }
-        showError('');
-    }catch(error){
-        el('state').innerText = 'Mất kết nối ESP32';
-        showError('Không thể lấy trạng thái: ' + error.message);
-    }finally{
-        isPolling = false;
-    }
-}
-
-async function loadConfig(){
-    try{
-        const data = await apiRequest('/api/config');
-        applyConfigToForm(data);
-    }catch(error){
-        showError('Không thể tải cấu hình: ' + error.message);
-    }
-}
-
-// Master Dual Controls
-async function openAll(){ try{ await apiRequest('/api/all/open', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi mở cả 2: ' + e.message); } }
-async function closeAll(){ try{ await apiRequest('/api/all/close', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi đóng cả 2: ' + e.message); } }
-async function startAll(){ try{ await apiRequest('/api/all/start', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi chạy cả 2: ' + e.message); } }
-async function stopAll(){ try{ await apiRequest('/api/all/stop', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi dừng tất cả: ' + e.message); } }
-
-// Servo 1 Controls (GPIO 1)
-async function openDoor1(){ try{ await apiRequest('/api/s1/open', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi mở S1: ' + e.message); } }
-async function closeDoor1(){ try{ await apiRequest('/api/s1/close', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi đóng S1: ' + e.message); } }
-async function startMotion1(){ try{ await apiRequest('/api/s1/start', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi bắt đầu S1: ' + e.message); } }
-async function stopMotion1(){ try{ await apiRequest('/api/s1/stop', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi dừng S1: ' + e.message); } }
-async function testForward1(){ try{ await apiRequest('/api/s1/test/forward', {method:'POST'}); await updateStatus(); }catch(e){ showError('Test thuận S1 thất bại: ' + e.message); } }
-async function testReverse1(){ try{ await apiRequest('/api/s1/test/reverse', {method:'POST'}); await updateStatus(); }catch(e){ showError('Test nghịch S1 thất bại: ' + e.message); } }
-
-// Servo 2 Controls (GPIO 2)
-async function openDoor2(){ try{ await apiRequest('/api/s2/open', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi mở S2: ' + e.message); } }
-async function closeDoor2(){ try{ await apiRequest('/api/s2/close', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi đóng S2: ' + e.message); } }
-async function startMotion2(){ try{ await apiRequest('/api/s2/start', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi bắt đầu S2: ' + e.message); } }
-async function stopMotion2(){ try{ await apiRequest('/api/s2/stop', {method:'POST'}); await updateStatus(); }catch(e){ showError('Lỗi dừng S2: ' + e.message); } }
-async function testForward2(){ try{ await apiRequest('/api/s2/test/forward', {method:'POST'}); await updateStatus(); }catch(e){ showError('Test thuận S2 thất bại: ' + e.message); } }
-async function testReverse2(){ try{ await apiRequest('/api/s2/test/reverse', {method:'POST'}); await updateStatus(); }catch(e){ showError('Test nghịch S2 thất bại: ' + e.message); } }
-
-// Compatibility Aliases
-async function openDoor(){ return openDoor1(); }
-async function closeDoor(){ return closeDoor1(); }
-async function startMotion(){ return startMotion1(); }
-async function stopMotion(){ return stopAll(); }
-async function testForward(){ return testForward1(); }
-async function testReverse(){ return testReverse1(); }
-
-    }catch(error){ showError('Không thể đóng: ' + error.message); }
-
-}
-
-
-
-async function startMotion(){
-
-    try{
-
-        await apiRequest('/api/start', {method:'POST'});
-
-        await updateStatus();
-
-    }catch(error){ showError('Không thể bắt đầu: ' + error.message); }
-
-}
-
-
-
-async function stopMotion(){
-
-    try{
-
-        await apiRequest('/api/stop', {method:'POST'});
-
-        await updateStatus();
-
-    }catch(error){ showError('Không thể dừng: ' + error.message); }
-
-}
-
-
-
-async function testForward(){
-
-    try{
-
-        await apiRequest('/api/test/forward', {method:'POST'});
-
-        await updateStatus();
-
-    }catch(error){ showError('Test thuận thất bại: ' + error.message); }
-
-}
-
-
-
-async function testReverse(){
-
-    try{
-
-        await apiRequest('/api/test/reverse', {method:'POST'});
-
-        await updateStatus();
-
-    }catch(error){ showError('Test nghịch thất bại: ' + error.message); }
-
-}
-
-
-
-async function saveConfig(){
-
-    const config = readForm();
-
-    const validationError = validateClientConfig(config);
-
-    if (validationError) {
-
-        showError(validationError);
-
-        return;
-
-    }
-
-
-
-    const params = new URLSearchParams();
-
-    params.append('stop', String(config.stop));
-
-    params.append('forward', String(config.forward));
-
-    params.append('reverse', String(config.reverse));
-
-    params.append('forwardMs', String(config.forwardMs));
-
-    params.append('reverseMs', String(config.reverseMs));
-
-    params.append('pauseMs', String(config.pauseMs));
-
-    params.append('cycles', String(config.cycles));
-
-
-
-    try{
-
-        const data = await apiRequest('/api/config', {
-
-            method:'POST',
-
-            headers:{'Content-Type':'application/x-www-form-urlencoded'},
-
-            body:params.toString()
-
-        });
-
-
-
-        applyConfigToForm(data);
-
-        showError('');
-
-        alert('✅ Đã lưu cấu hình vào ESP32.');
-
-        await updateStatus();
-
-    }catch(error){
-
-        showError('❌ Lưu cấu hình thất bại: ' + error.message);
-
-        alert('❌ Không lưu được cấu hình: ' + error.message);
-
-    }
-
-}
-
-
-
-async function factoryReset(){
-    if(!confirm('Khôi phục cấu hình mặc định? Các giá trị đã lưu sẽ bị thay thế.')) return;
-    try{
-        const data = await apiRequest('/api/config/reset', {method:'POST'});
-        applyConfigToForm(data);
-        alert('✅ Đã khôi phục cấu hình mặc định.');
-        await updateStatus();
-    }catch(error){
-        alert('❌ Không thể khôi phục: ' + error.message);
-        showError('Khôi phục thất bại: ' + error.message);
-    }
-}
-
-async function calibrate(direction){
-
-    let value = Number(el('calibrationValue').innerText);
-
-    if (!Number.isInteger(value)) value = 90;
-
-    value += direction;
-
-    value = Math.max(0, Math.min(180, value));
-
-
-
-    el('calibrationValue').innerText = value;
-
-    el('servoStop').value = value;
-
-    setDirty(true);
-
-
-
-    const params = new URLSearchParams();
-
-    params.append('value', String(value));
-
-
-
-    try{
-
-        const data = await apiRequest('/api/calibration', {
-
-            method:'POST',
-
-            headers:{'Content-Type':'application/x-www-form-urlencoded'},
-
-            body:params.toString()
-
-        });
-
-        el('calibrationValue').innerText = data.value;
-
-        el('servoStop').value = data.value;
-
-        setDirty(true);
-
-    }catch(error){
-
-        showError('Hiệu chỉnh thất bại: ' + error.message);
-
-    }
-
-}
-
-
-
-['servoStop','servoForward','servoReverse','forwardMs','reverseMs','pauseMs','cyclesInput']
-
-    .forEach(id => el(id).addEventListener('input', () => setDirty(true)));
-
-
-
-showTab('overview');
-
-loadConfig();
-
-updateStatus();
 
 setInterval(updateStatus, 500);
-
+updateStatus();
 </script>
-
 </body>
-
 </html>
-
 )rawliteral";

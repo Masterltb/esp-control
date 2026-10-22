@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import asynccontextmanager
 from typing import Set
 
 import serial
@@ -15,7 +16,13 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 # Configuration
-PORT = os.environ.get("ESP32_PORT", "COM3")
+PORT = os.environ.get("ESP32_PORT", "COM4")
+for idx, arg in enumerate(sys.argv):
+    if arg == "--port" and idx + 1 < len(sys.argv):
+        PORT = sys.argv[idx + 1]
+    elif arg.startswith("--port="):
+        PORT = arg.split("=", 1)[1]
+
 BAUD = 115200
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 
@@ -47,7 +54,7 @@ class DualModeSerialBridge:
             "connected": True,
             "is_hardware": False,
             "s1": {
-                "pin": 1,
+                "pin": 18,
                 "state": "Sẵn sàng",
                 "running": False,
                 "cycle": 0,
@@ -60,7 +67,7 @@ class DualModeSerialBridge:
                 "pauseMs": 500
             },
             "s2": {
-                "pin": 2,
+                "pin": 19,
                 "state": "Sẵn sàng",
                 "running": False,
                 "cycle": 0,
@@ -71,6 +78,40 @@ class DualModeSerialBridge:
                 "forwardMs": 1000,
                 "reverseMs": 1000,
                 "pauseMs": 500
+            },
+            "s3": {
+                "pin": 21,
+                "state": "Sẵn sàng",
+                "running": False,
+                "cycle": 0,
+                "cycles": 1,
+                "stop": 90,
+                "forward": 110,
+                "reverse": 70,
+                "forwardMs": 1000,
+                "reverseMs": 1000,
+                "pauseMs": 500
+            },
+            "s4": {
+                "pin": 22,
+                "state": "Sẵn sàng",
+                "running": False,
+                "cycle": 0,
+                "cycles": 1,
+                "stop": 90,
+                "forward": 110,
+                "reverse": 70,
+                "forwardMs": 1000,
+                "reverseMs": 1000,
+                "pauseMs": 500
+            },
+            "col1": {
+                "state": "Sẵn sàng",
+                "running": False
+            },
+            "col2": {
+                "state": "Sẵn sàng",
+                "running": False
             },
             "ir": {
                 "pin": 10,
@@ -84,18 +125,32 @@ class DualModeSerialBridge:
             }
         }
         
-        # Simulation timing for dual servos
-        self.s1_step = 0 # 0: IDLE, 1: FWD, 2: PAUSE1, 3: REV, 4: PAUSE2, 10: OPENING, 20: CLOSING
+        # Simulation timing for 4 servos & 2 columns
+        self.s1_step = 0
         self.s1_started_at = 0
         self.s2_step = 0
         self.s2_started_at = 0
+        self.s3_step = 0
+        self.s3_started_at = 0
+        self.s4_step = 0
+        self.s4_started_at = 0
+        self.col1_step = 0
+        self.col1_started_at = 0
+        self.col2_step = 0
+        self.col2_started_at = 0
         self.loop = None
         self.running = True
 
     def find_esp_port(self):
         ports = serial.tools.list_ports.comports()
         for p in ports:
-            if p.device == self.port or "ESP32" in (p.description or "") or "303A:1001" in (p.hwid or ""):
+            desc = (p.description or "").upper()
+            hwid = (p.hwid or "").upper()
+            if p.device == self.port:
+                return p.device
+            if any(k in desc for k in ["ESP32", "CP210", "CH340", "USB-SERIAL", "UART"]):
+                return p.device
+            if "303A:1001" in hwid or "10C4:EA60" in hwid or "1A86:7523" in hwid:
                 return p.device
         return None
 
@@ -210,7 +265,7 @@ class DualModeSerialBridge:
             self.s1_started_at = now
             s1["state"] = "Đang quay thuận"
             self._sync_root_status()
-            self.broadcast_log(f"[SERVO 1] FORWARD = {s1['forward']} (GPIO 1)", "esp")
+            self.broadcast_log(f"[SERVO 1] FORWARD = {s1['forward']} (GPIO 18)", "esp")
             self.broadcast_log('[RES] {"ok":true,"message":"Servo 1 đã bắt đầu"}', "esp")
             return {"ok": True, "message": "Servo 1 đã bắt đầu"}
         elif cmd in ("S1_STOP", "POST /api/s1/stop"):
@@ -270,7 +325,7 @@ class DualModeSerialBridge:
             self.s2_started_at = now
             s2["state"] = "Đang quay thuận"
             self._sync_root_status()
-            self.broadcast_log(f"[SERVO 2] FORWARD = {s2['forward']} (GPIO 2)", "esp")
+            self.broadcast_log(f"[SERVO 2] FORWARD = {s2['forward']} (GPIO 19)", "esp")
             self.broadcast_log('[RES] {"ok":true,"message":"Servo 2 đã bắt đầu"}', "esp")
             return {"ok": True, "message": "Servo 2 đã bắt đầu"}
         elif cmd in ("S2_STOP", "POST /api/s2/stop"):
@@ -320,30 +375,204 @@ class DualModeSerialBridge:
             self.broadcast_log(f'[RES] {{"ok":true,"channel":2,"value":{val}}}', "esp")
             return {"ok": True, "channel": 2, "value": val}
 
-        # --- MASTER COMMANDS ---
+        # --- SERVO 3 ---
+        elif cmd in ("S3_START", "POST /api/s3/start"):
+            s3 = self.latest_status["s3"]
+            if s3["running"]:
+                return {"ok": False, "error": "Servo 3 đang chạy"}
+            s3["running"] = True
+            s3["cycle"] = 1
+            self.s3_step = 1
+            self.s3_started_at = now
+            s3["state"] = "Đang quay thuận"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 3] FORWARD = {s3['forward']} (GPIO 21)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 đã bắt đầu"}', "esp")
+            return {"ok": True, "message": "Servo 3 đã bắt đầu"}
+        elif cmd in ("S3_STOP", "POST /api/s3/stop"):
+            s3 = self.latest_status["s3"]
+            s3["running"] = False
+            s3["state"] = "Đang dừng"
+            self.s3_step = 0
+            self._sync_root_status()
+            self.broadcast_log("[SERVO 3] STOP -> PWM DETACHED (Active Ground Clamp LOW)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 đã dừng"}', "esp")
+            return {"ok": True, "message": "Servo 3 đã dừng"}
+        elif cmd in ("S3_OPEN", "POST /api/s3/open"):
+            s3 = self.latest_status["s3"]
+            if s3["running"]:
+                return {"ok": False, "error": "Servo 3 đang chạy"}
+            s3["running"] = True
+            self.s3_step = 10
+            self.s3_started_at = now
+            s3["state"] = "Đang mở"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 3] OPENING = {s3['forward']} ({s3['forwardMs']}ms)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 đang mở"}', "esp")
+            return {"ok": True, "message": "Servo 3 đang mở"}
+        elif cmd in ("S3_CLOSE", "POST /api/s3/close"):
+            s3 = self.latest_status["s3"]
+            if s3["running"]:
+                return {"ok": False, "error": "Servo 3 đang chạy"}
+            s3["running"] = True
+            self.s3_step = 20
+            self.s3_started_at = now
+            s3["state"] = "Đang đóng"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 3] CLOSING = {s3['reverse']} ({s3['reverseMs']}ms)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 đang đóng"}', "esp")
+            return {"ok": True, "message": "Servo 3 đang đóng"}
+        elif cmd in ("S3_TEST_FWD", "POST /api/s3/test/forward"):
+            s3 = self.latest_status["s3"]
+            s3["state"] = "Đang quay thuận"
+            self.broadcast_log(f"[SERVO 3] TEST FORWARD = {s3['forward']}", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 quay thuận"}', "esp")
+            return {"ok": True, "message": "Servo 3 quay thuận"}
+        elif cmd in ("S3_TEST_REV", "POST /api/s3/test/reverse"):
+            s3 = self.latest_status["s3"]
+            s3["state"] = "Đang quay nghịch"
+            self.broadcast_log(f"[SERVO 3] TEST REVERSE = {s3['reverse']}", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 3 quay nghịch"}', "esp")
+            return {"ok": True, "message": "Servo 3 quay nghịch"}
+        elif cmd.startswith("S3_CALIB "):
+            val = int(cmd.split()[1])
+            self.latest_status["s3"]["stop"] = val
+            self.broadcast_log(f"[SERVO 3] TEST STOP VALUE = {val} (Active LOW)", "esp")
+            self.broadcast_log(f'[RES] {{"ok":true,"channel":3,"value":{val}}}', "esp")
+            return {"ok": True, "channel": 3, "value": val}
+
+        # --- SERVO 4 ---
+        elif cmd in ("S4_START", "POST /api/s4/start"):
+            s4 = self.latest_status["s4"]
+            if s4["running"]:
+                return {"ok": False, "error": "Servo 4 đang chạy"}
+            s4["running"] = True
+            s4["cycle"] = 1
+            self.s4_step = 1
+            self.s4_started_at = now
+            s4["state"] = "Đang quay thuận"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 4] FORWARD = {s4['forward']} (GPIO 22)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 đã bắt đầu"}', "esp")
+            return {"ok": True, "message": "Servo 4 đã bắt đầu"}
+        elif cmd in ("S4_STOP", "POST /api/s4/stop"):
+            s4 = self.latest_status["s4"]
+            s4["running"] = False
+            s4["state"] = "Đang dừng"
+            self.s4_step = 0
+            self._sync_root_status()
+            self.broadcast_log("[SERVO 4] STOP -> PWM DETACHED (Active Ground Clamp LOW)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 đã dừng"}', "esp")
+            return {"ok": True, "message": "Servo 4 đã dừng"}
+        elif cmd in ("S4_OPEN", "POST /api/s4/open"):
+            s4 = self.latest_status["s4"]
+            if s4["running"]:
+                return {"ok": False, "error": "Servo 4 đang chạy"}
+            s4["running"] = True
+            self.s4_step = 10
+            self.s4_started_at = now
+            s4["state"] = "Đang mở"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 4] OPENING = {s4['forward']} ({s4['forwardMs']}ms)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 đang mở"}', "esp")
+            return {"ok": True, "message": "Servo 4 đang mở"}
+        elif cmd in ("S4_CLOSE", "POST /api/s4/close"):
+            s4 = self.latest_status["s4"]
+            if s4["running"]:
+                return {"ok": False, "error": "Servo 4 đang chạy"}
+            s4["running"] = True
+            self.s4_step = 20
+            self.s4_started_at = now
+            s4["state"] = "Đang đóng"
+            self._sync_root_status()
+            self.broadcast_log(f"[SERVO 4] CLOSING = {s4['reverse']} ({s4['reverseMs']}ms)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 đang đóng"}', "esp")
+            return {"ok": True, "message": "Servo 4 đang đóng"}
+        elif cmd in ("S4_TEST_FWD", "POST /api/s4/test/forward"):
+            s4 = self.latest_status["s4"]
+            s4["state"] = "Đang quay thuận"
+            self.broadcast_log(f"[SERVO 4] TEST FORWARD = {s4['forward']}", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 quay thuận"}', "esp")
+            return {"ok": True, "message": "Servo 4 quay thuận"}
+        elif cmd in ("S4_TEST_REV", "POST /api/s4/test/reverse"):
+            s4 = self.latest_status["s4"]
+            s4["state"] = "Đang quay nghịch"
+            self.broadcast_log(f"[SERVO 4] TEST REVERSE = {s4['reverse']}", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Servo 4 quay nghịch"}', "esp")
+            return {"ok": True, "message": "Servo 4 quay nghịch"}
+        elif cmd.startswith("S4_CALIB "):
+            val = int(cmd.split()[1])
+            self.latest_status["s4"]["stop"] = val
+            self.broadcast_log(f"[SERVO 4] TEST STOP VALUE = {val} (Active LOW)", "esp")
+            self.broadcast_log(f'[RES] {{"ok":true,"channel":4,"value":{val}}}', "esp")
+            return {"ok": True, "channel": 4, "value": val}
+
+        # --- FIFO COLUMN DISPENSE COMMANDS ---
+        elif cmd in ("DISPENSE 1", "COL1_DISPENSE", "POST /api/col1/dispense", "POST /api/dispense/1"):
+            c1 = self.latest_status["col1"]
+            if c1["running"]:
+                return {"ok": False, "error": "Cột 1 đang bận nhả tô"}
+            c1["running"] = True
+            c1["state"] = "Mở servo dưới"
+            self.col1_step = 1
+            self.col1_started_at = now
+            self.handle_emulated_command("S1_OPEN")
+            self.broadcast_log("[COL1] Bắt đầu chu trình FIFO nhả tô Cột 1 (Táo - Apple)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Cột 1 đang nhả tô FIFO"}', "esp")
+            return {"ok": True, "message": "Cột 1 đang nhả tô FIFO"}
+        elif cmd in ("DISPENSE 2", "COL2_DISPENSE", "POST /api/col2/dispense", "POST /api/dispense/2"):
+            c2 = self.latest_status["col2"]
+            if c2["running"]:
+                return {"ok": False, "error": "Cột 2 đang bận nhả tô"}
+            c2["running"] = True
+            c2["state"] = "Mở servo dưới"
+            self.col2_step = 1
+            self.col2_started_at = now
+            self.handle_emulated_command("S3_OPEN")
+            self.broadcast_log("[COL2] Bắt đầu chu trình FIFO nhả tô Cột 2 (Dưa lưới - Melon)", "esp")
+            self.broadcast_log('[RES] {"ok":true,"message":"Cột 2 đang nhả tô FIFO"}', "esp")
+            return {"ok": True, "message": "Cột 2 đang nhả tô FIFO"}
+
+        # --- MASTER COMMANDS (ALL 4 SERVOS) ---
         elif cmd in ("ALL_START", "POST /api/all/start"):
             self.handle_emulated_command("S1_START")
             self.handle_emulated_command("S2_START")
-            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả Servo đã bắt đầu"}', "esp")
-            return {"ok": True, "message": "Tất cả Servo đã bắt đầu"}
+            self.handle_emulated_command("S3_START")
+            self.handle_emulated_command("S4_START")
+            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả 4 Servo đã bắt đầu"}', "esp")
+            return {"ok": True, "message": "Tất cả 4 Servo đã bắt đầu"}
         elif cmd in ("ALL_STOP", "STOP", "POST /api/stop", "POST /api/all/stop"):
             self.handle_emulated_command("S1_STOP")
             self.handle_emulated_command("S2_STOP")
-            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả Servo đã dừng"}', "esp")
-            return {"ok": True, "message": "Tất cả Servo đã dừng"}
+            self.handle_emulated_command("S3_STOP")
+            self.handle_emulated_command("S4_STOP")
+            self.latest_status["col1"]["running"] = False
+            self.latest_status["col2"]["running"] = False
+            self.latest_status["col1"]["state"] = "Sẵn sàng"
+            self.latest_status["col2"]["state"] = "Sẵn sàng"
+            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả 4 Servo đã dừng"}', "esp")
+            return {"ok": True, "message": "Tất cả 4 Servo đã dừng"}
         elif cmd in ("ALL_OPEN", "POST /api/all/open"):
             self.handle_emulated_command("S1_OPEN")
             self.handle_emulated_command("S2_OPEN")
-            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả Servo đang mở"}', "esp")
-            return {"ok": True, "message": "Tất cả Servo đang mở"}
+            self.handle_emulated_command("S3_OPEN")
+            self.handle_emulated_command("S4_OPEN")
+            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả 4 Servo đang mở"}', "esp")
+            return {"ok": True, "message": "Tất cả 4 Servo đang mở"}
         elif cmd in ("ALL_CLOSE", "POST /api/all/close"):
             self.handle_emulated_command("S1_CLOSE")
             self.handle_emulated_command("S2_CLOSE")
-            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả Servo đang đóng"}', "esp")
-            return {"ok": True, "message": "Tất cả Servo đang đóng"}
+            self.handle_emulated_command("S3_CLOSE")
+            self.handle_emulated_command("S4_CLOSE")
+            self.broadcast_log('[RES] {"ok":true,"message":"Tất cả 4 Servo đang đóng"}', "esp")
+            return {"ok": True, "message": "Tất cả 4 Servo đang đóng"}
 
         elif cmd.startswith("CONFIG_SET"):
             params = cmd.split()[1:]
+            s1 = self.latest_status["s1"]
+            s2 = self.latest_status["s2"]
+            s3 = self.latest_status["s3"]
+            s4 = self.latest_status["s4"]
             for p in params:
                 if "=" in p:
                     k, v = p.split("=", 1)
@@ -356,6 +585,7 @@ class DualModeSerialBridge:
                         elif k in ("reverseMs", "revMs", "revMs1"): s1["reverseMs"] = iv
                         elif k in ("pauseMs", "pauseMs1"): s1["pauseMs"] = iv
                         elif k in ("cycles", "cycles1"): s1["cycles"] = iv
+                        # S2
                         elif k == "stop2": s2["stop"] = iv
                         elif k == "forward2": s2["forward"] = iv
                         elif k == "reverse2": s2["reverse"] = iv
@@ -363,17 +593,35 @@ class DualModeSerialBridge:
                         elif k in ("reverseMs2", "revMs2"): s2["reverseMs"] = iv
                         elif k == "pauseMs2": s2["pauseMs"] = iv
                         elif k == "cycles2": s2["cycles"] = iv
+                        # S3
+                        elif k == "stop3": s3["stop"] = iv
+                        elif k == "forward3": s3["forward"] = iv
+                        elif k == "reverse3": s3["reverse"] = iv
+                        elif k in ("forwardMs3", "fwdMs3"): s3["forwardMs"] = iv
+                        elif k in ("reverseMs3", "revMs3"): s3["reverseMs"] = iv
+                        elif k == "pauseMs3": s3["pauseMs"] = iv
+                        elif k == "cycles3": s3["cycles"] = iv
+                        # S4
+                        elif k == "stop4": s4["stop"] = iv
+                        elif k == "forward4": s4["forward"] = iv
+                        elif k == "reverse4": s4["reverse"] = iv
+                        elif k in ("forwardMs4", "fwdMs4"): s4["forwardMs"] = iv
+                        elif k in ("reverseMs4", "revMs4"): s4["reverseMs"] = iv
+                        elif k == "pauseMs4": s4["pauseMs"] = iv
+                        elif k == "cycles4": s4["cycles"] = iv
                     except ValueError:
                         pass
             self._sync_root_status()
-            self.broadcast_log("[CONFIG] Đã lưu cấu hình Servo 1 & Servo 2 vào NVS Flash (Mô phỏng)", "esp")
+            self.broadcast_log("[CONFIG] Đã lưu cấu hình 4 Servo vào NVS Flash (Mô phỏng)", "esp")
             self.broadcast_log(f"[RES] {json.dumps(self.latest_status, ensure_ascii=False)}", "esp")
             return {"ok": True, "message": "Đã lưu cấu hình"}
         elif cmd in ("RESET", "POST /api/config/reset"):
-            s1.update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
-            s2.update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
+            self.latest_status["s1"].update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
+            self.latest_status["s2"].update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
+            self.latest_status["s3"].update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
+            self.latest_status["s4"].update({"stop": 90, "forward": 110, "reverse": 70, "forwardMs": 1000, "reverseMs": 1000, "pauseMs": 500, "cycles": 1})
             self._sync_root_status()
-            self.broadcast_log("[CONFIG] Khôi phục cài đặt mặc định thành công cho cả 2 Servo", "esp")
+            self.broadcast_log("[CONFIG] Khôi phục cài đặt mặc định thành công cho cả 4 Servo", "esp")
             return {"ok": True, "message": "Đã khôi phục mặc định"}
 
         # --- IR SENSOR COMMANDS (SIMULATED & PASSTHROUGH) ---
@@ -597,6 +845,200 @@ class DualModeSerialBridge:
                             s2["state"] = "Đã đóng"
                             self.broadcast_log("[SERVO 2] STOP -> PWM DETACHED (Active Ground Clamp - CLOSED)", "esp")
 
+                # S3 Step
+                s3 = self.latest_status["s3"]
+                if s3["running"]:
+                    elapsed_ms = (now - self.s3_started_at) * 1000
+                    fwd_ms = s3["forwardMs"]
+                    rev_ms = s3["reverseMs"]
+                    pause_ms = s3["pauseMs"]
+                    cyc = s3["cycle"]
+                    total_cyc = s3["cycles"]
+                    if self.s3_step == 1:
+                        if elapsed_ms >= fwd_ms:
+                            self.s3_step = 2
+                            self.s3_started_at = now
+                            s3["state"] = "Đang dừng (Tạm dừng)"
+                            self.broadcast_log("[SERVO 3] STOP -> PWM DETACHED (Active Ground Clamp)", "esp")
+                    elif self.s3_step == 2:
+                        if elapsed_ms >= pause_ms:
+                            self.s3_step = 3
+                            self.s3_started_at = now
+                            s3["state"] = "Đang quay nghịch"
+                            self.broadcast_log(f"[SERVO 3] REVERSE = {s3['reverse']}", "esp")
+                    elif self.s3_step == 3:
+                        if elapsed_ms >= rev_ms:
+                            self.s3_step = 4
+                            self.s3_started_at = now
+                            s3["state"] = "Đang dừng (Tạm dừng)"
+                            self.broadcast_log("[SERVO 3] STOP -> PWM DETACHED (Active Ground Clamp)", "esp")
+                    elif self.s3_step == 4:
+                        if elapsed_ms >= pause_ms:
+                            if cyc < total_cyc:
+                                s3["cycle"] += 1
+                                self.s3_step = 1
+                                self.s3_started_at = now
+                                s3["state"] = "Đang quay thuận"
+                                self.broadcast_log(f"[SERVO 3] START cycle={s3['cycle']}/{total_cyc}", "esp")
+                            else:
+                                self.s3_step = 0
+                                s3["running"] = False
+                                s3["state"] = "Hoàn thành"
+                                self.broadcast_log(f"[SERVO 3] COMPLETE {total_cyc}/{total_cyc} cycles", "esp")
+                    elif self.s3_step == 10:
+                        if elapsed_ms >= fwd_ms:
+                            self.s3_step = 0
+                            s3["running"] = False
+                            s3["state"] = "Đã mở"
+                            self.broadcast_log("[SERVO 3] STOP -> PWM DETACHED (Active Ground Clamp - OPENED)", "esp")
+                    elif self.s3_step == 20:
+                        if elapsed_ms >= rev_ms:
+                            self.s3_step = 0
+                            s3["running"] = False
+                            s3["state"] = "Đã đóng"
+                            self.broadcast_log("[SERVO 3] STOP -> PWM DETACHED (Active Ground Clamp - CLOSED)", "esp")
+
+                # S4 Step
+                s4 = self.latest_status["s4"]
+                if s4["running"]:
+                    elapsed_ms = (now - self.s4_started_at) * 1000
+                    fwd_ms = s4["forwardMs"]
+                    rev_ms = s4["reverseMs"]
+                    pause_ms = s4["pauseMs"]
+                    cyc = s4["cycle"]
+                    total_cyc = s4["cycles"]
+                    if self.s4_step == 1:
+                        if elapsed_ms >= fwd_ms:
+                            self.s4_step = 2
+                            self.s4_started_at = now
+                            s4["state"] = "Đang dừng (Tạm dừng)"
+                            self.broadcast_log("[SERVO 4] STOP -> PWM DETACHED (Active Ground Clamp)", "esp")
+                    elif self.s4_step == 2:
+                        if elapsed_ms >= pause_ms:
+                            self.s4_step = 3
+                            self.s4_started_at = now
+                            s4["state"] = "Đang quay nghịch"
+                            self.broadcast_log(f"[SERVO 4] REVERSE = {s4['reverse']}", "esp")
+                    elif self.s4_step == 3:
+                        if elapsed_ms >= rev_ms:
+                            self.s4_step = 4
+                            self.s4_started_at = now
+                            s4["state"] = "Đang dừng (Tạm dừng)"
+                            self.broadcast_log("[SERVO 4] STOP -> PWM DETACHED (Active Ground Clamp)", "esp")
+                    elif self.s4_step == 4:
+                        if elapsed_ms >= pause_ms:
+                            if cyc < total_cyc:
+                                s4["cycle"] += 1
+                                self.s4_step = 1
+                                self.s4_started_at = now
+                                s4["state"] = "Đang quay thuận"
+                                self.broadcast_log(f"[SERVO 4] START cycle={s4['cycle']}/{total_cyc}", "esp")
+                            else:
+                                self.s4_step = 0
+                                s4["running"] = False
+                                s4["state"] = "Hoàn thành"
+                                self.broadcast_log(f"[SERVO 4] COMPLETE {total_cyc}/{total_cyc} cycles", "esp")
+                    elif self.s4_step == 10:
+                        if elapsed_ms >= fwd_ms:
+                            self.s4_step = 0
+                            s4["running"] = False
+                            s4["state"] = "Đã mở"
+                            self.broadcast_log("[SERVO 4] STOP -> PWM DETACHED (Active Ground Clamp - OPENED)", "esp")
+                    elif self.s4_step == 20:
+                        if elapsed_ms >= rev_ms:
+                            self.s4_step = 0
+                            s4["running"] = False
+                            s4["state"] = "Đã đóng"
+                            self.broadcast_log("[SERVO 4] STOP -> PWM DETACHED (Active Ground Clamp - CLOSED)", "esp")
+
+                # Column 1 FIFO Dispense Sequence
+                c1 = self.latest_status["col1"]
+                if c1["running"]:
+                    elapsed = (now - self.col1_started_at) * 1000
+                    if self.col1_step == 1:
+                        if not s1["running"] and s1["state"] == "Đã mở":
+                            self.col1_step = 2
+                            self.col1_started_at = now
+                            c1["state"] = "Nhả tô ra ngoài"
+                    elif self.col1_step == 2:
+                        if elapsed >= 600:
+                            self.col1_step = 3
+                            self.col1_started_at = now
+                            c1["state"] = "Đóng servo dưới"
+                            self.handle_emulated_command("S1_CLOSE")
+                    elif self.col1_step == 3:
+                        if not s1["running"] and s1["state"] == "Đã đóng":
+                            self.col1_step = 4
+                            self.col1_started_at = now
+                            c1["state"] = "Tạm dừng giữa"
+                    elif self.col1_step == 4:
+                        if elapsed >= 300:
+                            self.col1_step = 5
+                            self.col1_started_at = now
+                            c1["state"] = "Mở servo trên để nạp"
+                            self.handle_emulated_command("S2_OPEN")
+                    elif self.col1_step == 5:
+                        if not s2["running"] and s2["state"] == "Đã mở":
+                            self.col1_step = 6
+                            self.col1_started_at = now
+                            c1["state"] = "Tô trên rơi xuống"
+                    elif self.col1_step == 6:
+                        if elapsed >= 600:
+                            self.col1_step = 7
+                            self.col1_started_at = now
+                            c1["state"] = "Khóa servo trên"
+                            self.handle_emulated_command("S2_CLOSE")
+                    elif self.col1_step == 7:
+                        if not s2["running"] and s2["state"] == "Đã đóng":
+                            self.col1_step = 0
+                            c1["running"] = False
+                            c1["state"] = "Sẵn sàng"
+                            self.broadcast_log("[COL1] Chu trình FIFO nhả tô & nạp lại đã hoàn tất thành công!", "esp")
+
+                # Column 2 FIFO Dispense Sequence
+                c2 = self.latest_status["col2"]
+                if c2["running"]:
+                    elapsed = (now - self.col2_started_at) * 1000
+                    if self.col2_step == 1:
+                        if not s3["running"] and s3["state"] == "Đã mở":
+                            self.col2_step = 2
+                            self.col2_started_at = now
+                            c2["state"] = "Nhả tô ra ngoài"
+                    elif self.col2_step == 2:
+                        if elapsed >= 600:
+                            self.col2_step = 3
+                            self.col2_started_at = now
+                            c2["state"] = "Đóng servo dưới"
+                            self.handle_emulated_command("S3_CLOSE")
+                    elif self.col2_step == 3:
+                        if not s3["running"] and s3["state"] == "Đã đóng":
+                            self.col2_step = 4
+                            self.col2_started_at = now
+                            c2["state"] = "Tạm dừng giữa"
+                    elif self.col2_step == 4:
+                        if elapsed >= 300:
+                            self.col2_step = 5
+                            self.col2_started_at = now
+                            c2["state"] = "Mở servo trên để nạp"
+                            self.handle_emulated_command("S4_OPEN")
+                    elif self.col2_step == 5:
+                        if not s4["running"] and s4["state"] == "Đã mở":
+                            self.col2_step = 6
+                            self.col2_started_at = now
+                            c2["state"] = "Tô trên rơi xuống"
+                    elif self.col2_step == 6:
+                        if elapsed >= 600:
+                            self.col2_step = 7
+                            self.col2_started_at = now
+                            c2["state"] = "Khóa servo trên"
+                            self.handle_emulated_command("S4_CLOSE")
+                    elif self.col2_step == 7:
+                        if not s4["running"] and s4["state"] == "Đã đóng":
+                            self.col2_step = 0
+                            c2["running"] = False
+                            c2["state"] = "Sẵn sàng"
+                            self.broadcast_log("[COL2] Chu trình FIFO nhả tô & nạp lại đã hoàn tất thành công!", "esp")
+
                 self._sync_root_status()
 
                 # Broadcast telemetry update at 10Hz
@@ -638,16 +1080,44 @@ async def js_handler(request):
             return Response(f.read(), media_type="application/javascript", headers=NO_CACHE_HEADERS)
     return Response("", media_type="application/javascript")
 
+async def exec_cmd(cmd: str) -> dict:
+    loop = asyncio.get_running_loop()
+    try:
+        res = await loop.run_in_executor(None, bridge.send_command, cmd)
+        return res or {"ok": True, "message": f"Đã gửi {cmd}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 async def api_status(request):
     return JSONResponse(bridge.latest_status)
 
 async def api_cmd(request):
-    data = await request.json()
-    cmd = data.get("cmd", "")
-    if not cmd:
-        return JSONResponse({"ok": False, "error": "Thiếu tham số cmd"}, status_code=400)
-    res = bridge.send_command(cmd)
-    return JSONResponse(res)
+    try:
+        data = {}
+        try:
+            data = await request.json()
+        except Exception:
+            pass
+
+        cmd = ""
+        if isinstance(data, dict):
+            cmd = data.get("cmd", "")
+        if not cmd:
+            cmd = request.query_params.get("cmd", "")
+        if not cmd:
+            try:
+                body = await request.body()
+                cmd = body.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                pass
+
+        if not cmd:
+            return JSONResponse({"ok": False, "error": "Thiếu tham số cmd"}, status_code=400)
+
+        res = await exec_cmd(cmd)
+        return JSONResponse(res)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Lỗi thực thi lệnh: {str(e)}"}, status_code=500)
 
 async def api_reboot(request):
     success = bridge.reboot_device()
@@ -679,6 +1149,7 @@ async def api_run_hil(request):
 
 # WebSocket Handler
 async def websocket_endpoint(websocket: WebSocket):
+    bridge.loop = asyncio.get_running_loop()
     await websocket.accept()
     queue = asyncio.Queue()
     bridge.subscribers.add(queue)
@@ -702,7 +1173,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if action == "cmd":
                 cmd = data.get("cmd", "")
                 if cmd:
-                    res = bridge.send_command(cmd)
+                    res = await exec_cmd(cmd)
                     await websocket.send_json({"type": "cmd_response", "cmd": cmd, "res": res})
             elif action == "reboot":
                 bridge.reboot_device()
@@ -725,61 +1196,45 @@ async def websocket_endpoint(websocket: WebSocket):
         bridge.subscribers.discard(queue)
 
 # REST Handlers for Servos
-async def api_open(request):
-    return JSONResponse(bridge.send_command("S1_OPEN"))
+async def api_open(request): return JSONResponse(await exec_cmd("S1_OPEN"))
+async def api_close(request): return JSONResponse(await exec_cmd("S1_CLOSE"))
+async def api_start(request): return JSONResponse(await exec_cmd("S1_START"))
+async def api_stop(request): return JSONResponse(await exec_cmd("ALL_STOP"))
 
-async def api_close(request):
-    return JSONResponse(bridge.send_command("S1_CLOSE"))
+async def api_s1_open(request): return JSONResponse(await exec_cmd("S1_OPEN"))
+async def api_s1_close(request): return JSONResponse(await exec_cmd("S1_CLOSE"))
+async def api_s1_start(request): return JSONResponse(await exec_cmd("S1_START"))
+async def api_s1_stop(request): return JSONResponse(await exec_cmd("S1_STOP"))
 
-async def api_start(request):
-    return JSONResponse(bridge.send_command("S1_START"))
+async def api_s2_open(request): return JSONResponse(await exec_cmd("S2_OPEN"))
+async def api_s2_close(request): return JSONResponse(await exec_cmd("S2_CLOSE"))
+async def api_s2_start(request): return JSONResponse(await exec_cmd("S2_START"))
+async def api_s2_stop(request): return JSONResponse(await exec_cmd("S2_STOP"))
 
-async def api_stop(request):
-    return JSONResponse(bridge.send_command("ALL_STOP"))
+async def api_s3_open(request): return JSONResponse(await exec_cmd("S3_OPEN"))
+async def api_s3_close(request): return JSONResponse(await exec_cmd("S3_CLOSE"))
+async def api_s3_start(request): return JSONResponse(await exec_cmd("S3_START"))
+async def api_s3_stop(request): return JSONResponse(await exec_cmd("S3_STOP"))
 
-async def api_s1_open(request):
-    return JSONResponse(bridge.send_command("S1_OPEN"))
+async def api_s4_open(request): return JSONResponse(await exec_cmd("S4_OPEN"))
+async def api_s4_close(request): return JSONResponse(await exec_cmd("S4_CLOSE"))
+async def api_s4_start(request): return JSONResponse(await exec_cmd("S4_START"))
+async def api_s4_stop(request): return JSONResponse(await exec_cmd("S4_STOP"))
 
-async def api_s1_close(request):
-    return JSONResponse(bridge.send_command("S1_CLOSE"))
+async def api_col1_dispense(request): return JSONResponse(await exec_cmd("DISPENSE 1"))
+async def api_col2_dispense(request): return JSONResponse(await exec_cmd("DISPENSE 2"))
 
-async def api_s1_start(request):
-    return JSONResponse(bridge.send_command("S1_START"))
-
-async def api_s1_stop(request):
-    return JSONResponse(bridge.send_command("S1_STOP"))
-
-async def api_s2_open(request):
-    return JSONResponse(bridge.send_command("S2_OPEN"))
-
-async def api_s2_close(request):
-    return JSONResponse(bridge.send_command("S2_CLOSE"))
-
-async def api_s2_start(request):
-    return JSONResponse(bridge.send_command("S2_START"))
-
-async def api_s2_stop(request):
-    return JSONResponse(bridge.send_command("S2_STOP"))
-
-async def api_all_open(request):
-    return JSONResponse(bridge.send_command("ALL_OPEN"))
-
-async def api_all_close(request):
-    return JSONResponse(bridge.send_command("ALL_CLOSE"))
-
-async def api_all_start(request):
-    return JSONResponse(bridge.send_command("ALL_START"))
-
-async def api_all_stop(request):
-    return JSONResponse(bridge.send_command("ALL_STOP"))
+async def api_all_open(request): return JSONResponse(await exec_cmd("ALL_OPEN"))
+async def api_all_close(request): return JSONResponse(await exec_cmd("ALL_CLOSE"))
+async def api_all_start(request): return JSONResponse(await exec_cmd("ALL_START"))
+async def api_all_stop(request): return JSONResponse(await exec_cmd("ALL_STOP"))
 
 # IR Sensor Handlers
 async def api_ir_status(request):
     return JSONResponse(bridge.latest_status.get("ir", {}))
 
 async def api_ir_reset(request):
-    res = bridge.send_command("IR_RESET")
-    return JSONResponse(res)
+    return JSONResponse(await exec_cmd("IR_RESET"))
 
 async def api_ir_auto(request):
     mode = 0
@@ -789,8 +1244,7 @@ async def api_ir_auto(request):
             mode = body.get("mode", 0)
         except Exception:
             mode = request.query_params.get("mode", 0)
-    res = bridge.send_command(f"IR_AUTO {mode}")
-    return JSONResponse(res)
+    return JSONResponse(await exec_cmd(f"IR_AUTO {mode}"))
 
 async def api_ir_tx(request):
     enable = True
@@ -801,12 +1255,10 @@ async def api_ir_tx(request):
         except Exception:
             enable = request.query_params.get("enable", "1") in ("1", "true", "True")
     cmd = "IR_TX_ON" if enable else "IR_TX_OFF"
-    res = bridge.send_command(cmd)
-    return JSONResponse(res)
+    return JSONResponse(await exec_cmd(cmd))
 
 async def api_ir_simulate(request):
-    res = bridge.send_command("IR_TRIGGER")
-    return JSONResponse(res)
+    return JSONResponse(await exec_cmd("IR_TRIGGER"))
 
 routes = [
     Route("/", index_handler, methods=["GET"]),
@@ -826,6 +1278,18 @@ routes = [
     Route("/api/s2/close", api_s2_close, methods=["POST"]),
     Route("/api/s2/start", api_s2_start, methods=["POST"]),
     Route("/api/s2/stop", api_s2_stop, methods=["POST"]),
+    Route("/api/s3/open", api_s3_open, methods=["POST"]),
+    Route("/api/s3/close", api_s3_close, methods=["POST"]),
+    Route("/api/s3/start", api_s3_start, methods=["POST"]),
+    Route("/api/s3/stop", api_s3_stop, methods=["POST"]),
+    Route("/api/s4/open", api_s4_open, methods=["POST"]),
+    Route("/api/s4/close", api_s4_close, methods=["POST"]),
+    Route("/api/s4/start", api_s4_start, methods=["POST"]),
+    Route("/api/s4/stop", api_s4_stop, methods=["POST"]),
+    Route("/api/col1/dispense", api_col1_dispense, methods=["POST"]),
+    Route("/api/col2/dispense", api_col2_dispense, methods=["POST"]),
+    Route("/api/dispense/1", api_col1_dispense, methods=["POST"]),
+    Route("/api/dispense/2", api_col2_dispense, methods=["POST"]),
     Route("/api/all/open", api_all_open, methods=["POST"]),
     Route("/api/all/close", api_all_close, methods=["POST"]),
     Route("/api/all/start", api_all_start, methods=["POST"]),
@@ -840,7 +1304,12 @@ routes = [
     WebSocketRoute("/ws", websocket_endpoint)
 ]
 
-app = Starlette(routes=routes)
+@asynccontextmanager
+async def lifespan(app):
+    bridge.loop = asyncio.get_running_loop()
+    yield
+
+app = Starlette(routes=routes, lifespan=lifespan)
 
 def open_browser_delayed():
     time.sleep(1.2)
@@ -857,7 +1326,6 @@ def main():
     print("  Trinh duyet se tu dong mo len trong giay lat...")
     print("  LUU Y: Cua so nay can duoc giu mo de duy tri ket noi voi ESP32!")
     print("=" * 65)
-    bridge.loop = asyncio.get_event_loop()
     threading.Thread(target=bridge.background_worker, daemon=True).start()
     threading.Thread(target=open_browser_delayed, daemon=True).start()
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")

@@ -6,21 +6,55 @@
 #include <Arduino_GFX_Library.h>
 
 // ============================================================
-// ESP32 CONTROL CENTER - DUAL SERVO FIXED VERSION
-// Board: LILYGO T-Display-S3 (ESP32-S3R8, 16MB Flash, 8MB PSRAM)
-// Servo 1: GPIO 1 (360° Continuous Rotation)
-// Servo 2: GPIO 2 (360° Continuous Rotation)
+// ESP32 CONTROL CENTER - QUAD SERVO (4 SERVOS AUTO & FIFO)
+// Board: LILYGO T-Display-S3 (ESP32-S3R8, 16MB Flash, 8MB PSRAM) / ESP32 DevKit
+// Servo 1: GPIO 1  (Col 1 Lower Gate) [or GPIO 18 on standard ESP32]
+// Servo 2: GPIO 2  (Col 1 Upper Gate) [or GPIO 19 on standard ESP32]
+// Servo 3: GPIO 12 (Col 2 Lower Gate) [or GPIO 21 on standard ESP32]
+// Servo 4: GPIO 13 (Col 2 Upper Gate) [or GPIO 22 on standard ESP32]
 // Both with Lazy PWM Attach & Zero-Drift Active Ground Clamping
+// Supports FIFO Dual-Column Vending Machine Dispense Sequence
 // ============================================================
 
 // -----------------------------
 // 1. PIN CONFIGURATION
+// Cột 1: Dưới GPIO 18, Trên GPIO 19
+// Cột 2: Dưới GPIO 21, Trên GPIO 22
 // -----------------------------
-#define SERVO_1_PIN         1
-#define SERVO_2_PIN         2
+#define BOARD_SERVO_1_PIN         18  // Cột 1 Cửa Dưới (Nhả tô Cột 1)
+#define BOARD_SERVO_2_PIN         19  // Cột 1 Cửa Trên (Nạp/Giữ tô Cột 1)
+#define BOARD_SERVO_3_PIN         21  // Cột 2 Cửa Dưới (Nhả tô Cột 2)
+#define BOARD_SERVO_4_PIN         22  // Cột 2 Cửa Trên (Nạp/Giữ tô Cột 2)
+#define BOARD_IR_RECEIVER_PIN     25  // Safe Digital Input (IR Receiver / Beam Sensor)
+#define BOARD_IR_TRANSMITTER_PIN  26  // Safe Digital Output (IR Transmitter LED)
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#define HAS_ST7789_PARALLEL_LCD   1
+#else
+#define HAS_ST7789_PARALLEL_LCD   0
+#endif
+
+#ifndef SERVO_1_PIN
+#define SERVO_1_PIN BOARD_SERVO_1_PIN
+#endif
+#ifndef SERVO_2_PIN
+#define SERVO_2_PIN BOARD_SERVO_2_PIN
+#endif
+#ifndef SERVO_3_PIN
+#define SERVO_3_PIN BOARD_SERVO_3_PIN
+#endif
+#ifndef SERVO_4_PIN
+#define SERVO_4_PIN BOARD_SERVO_4_PIN
+#endif
+
 #define SERVO_PIN           SERVO_1_PIN // Backwards compatibility
-#define IR_RECEIVER_PIN     10  // Left Header Pin 5 (Digital Input from IR Receiver)
-#define IR_TRANSMITTER_PIN  11  // Left Header Pin 6 (Digital Output to IR Transmitter LED)
+#ifndef IR_RECEIVER_PIN
+#define IR_RECEIVER_PIN     BOARD_IR_RECEIVER_PIN
+#endif
+#ifndef IR_TRANSMITTER_PIN
+#define IR_TRANSMITTER_PIN  BOARD_IR_TRANSMITTER_PIN
+#endif
+
 #define LCD_POWER_PIN       15
 #define LCD_BL_PIN          38
 
@@ -35,7 +69,9 @@
 #define COLOR_YELLOW    0xFFE0
 #define COLOR_CYAN      0x07FF
 #define COLOR_ORANGE    0xFD20
+#define COLOR_PURPLE    0x780F
 
+#if HAS_ST7789_PARALLEL_LCD
 Arduino_DataBus *bus = new Arduino_ESP32PAR8Q(
     7, 6, 8, 9,
     39, 40, 41, 42,
@@ -51,11 +87,15 @@ Arduino_GFX *gfx = new Arduino_ST7789(
     320,
     35, 0, 35, 0
 );
+#else
+Arduino_DataBus *bus = nullptr;
+Arduino_GFX *gfx = nullptr;
+#endif
 
 // -----------------------------
 // 3. WIFI / WEB SERVER
 // -----------------------------
-const char *AP_SSID = "ESP32-Servo";
+const char *AP_SSID = "ESP32-Servo-Quad";
 const char *AP_PASSWORD = "12345678";
 
 WebServer server(80);
@@ -67,16 +107,22 @@ bool servo1Attached = false;
 Servo servo2;
 bool servo2Attached = false;
 
+Servo servo3;
+bool servo3Attached = false;
+
+Servo servo4;
+bool servo4Attached = false;
+
 // Backwards compatibility aliases
 #define servo servo1
 #define servoAttached servo1Attached
 
-static const uint32_t CONFIG_SCHEMA_VERSION = 5;
+static const uint32_t CONFIG_SCHEMA_VERSION = 6;
 
 // -----------------------------
-// 4. DUAL SERVO CONFIGURATION
+// 4. QUAD SERVO CONFIGURATION
 // -----------------------------
-// Servo 1 (GPIO 1):
+// Servo 1 (Col 1 Lower Gate):
 int servo1Stop = 90;
 int servo1Forward = 110;
 int servo1Reverse = 70;
@@ -85,7 +131,7 @@ unsigned long reverseMs1 = 1000;
 unsigned long pauseMs1 = 500;
 int cycles1 = 1;
 
-// Servo 2 (GPIO 2):
+// Servo 2 (Col 1 Upper Gate):
 int servo2Stop = 90;
 int servo2Forward = 110;
 int servo2Reverse = 70;
@@ -93,6 +139,24 @@ unsigned long forwardMs2 = 1000;
 unsigned long reverseMs2 = 1000;
 unsigned long pauseMs2 = 500;
 int cycles2 = 1;
+
+// Servo 3 (Col 2 Lower Gate):
+int servo3Stop = 90;
+int servo3Forward = 110;
+int servo3Reverse = 70;
+unsigned long forwardMs3 = 1000;
+unsigned long reverseMs3 = 1000;
+unsigned long pauseMs3 = 500;
+int cycles3 = 1;
+
+// Servo 4 (Col 2 Upper Gate):
+int servo4Stop = 90;
+int servo4Forward = 110;
+int servo4Reverse = 70;
+unsigned long forwardMs4 = 1000;
+unsigned long reverseMs4 = 1000;
+unsigned long pauseMs4 = 500;
+int cycles4 = 1;
 
 // -----------------------------
 // 4B. IR SENSOR & BOWL DETECTION
@@ -104,7 +168,7 @@ uint32_t irObjectCount = 0;         // Total bowls/objects passed
 unsigned long irLastDetectionMs = 0;// Timestamp of last detection
 unsigned long irBlockStartMs = 0;   // When current beam block started
 unsigned long irBlockDurationMs = 0;// How long beam has been blocked
-int irAutoTriggerServo = 0;         // 0: Disabled, 1: Auto S1, 2: Auto S2, 3: Auto Both
+int irAutoTriggerServo = 0;         // 0: Disabled, 1: Auto S1, 2: Auto S2, 3: Auto Both, 4: Col 1 Dispense, 5: Col 2 Dispense
 bool irTxEnabled = true;            // IR Transmitter power state
 unsigned long irDebounceMs = 60;    // Non-blocking debounce time in ms
 unsigned long irLastStateChangeMs = 0;
@@ -148,6 +212,18 @@ enum MotionState {
     STATE_ERROR
 };
 
+enum ColumnDispenseState {
+    COL_IDLE,
+    COL_DISPENSE_LOWER_OPEN,
+    COL_DISPENSE_LOWER_HOLD,
+    COL_DISPENSE_LOWER_CLOSE,
+    COL_DISPENSE_PAUSE_MID,
+    COL_DISPENSE_UPPER_OPEN,
+    COL_DISPENSE_UPPER_HOLD,
+    COL_DISPENSE_UPPER_CLOSE,
+    COL_DISPENSE_COMPLETE
+};
+
 MotionState motionState1 = STATE_IDLE;
 unsigned long state1StartedAt = 0;
 int currentCycle1 = 0;
@@ -155,6 +231,20 @@ int currentCycle1 = 0;
 MotionState motionState2 = STATE_IDLE;
 unsigned long state2StartedAt = 0;
 int currentCycle2 = 0;
+
+MotionState motionState3 = STATE_IDLE;
+unsigned long state3StartedAt = 0;
+int currentCycle3 = 0;
+
+MotionState motionState4 = STATE_IDLE;
+unsigned long state4StartedAt = 0;
+int currentCycle4 = 0;
+
+ColumnDispenseState col1DispenseState = COL_IDLE;
+unsigned long col1DispenseStartedAt = 0;
+
+ColumnDispenseState col2DispenseState = COL_IDLE;
+unsigned long col2DispenseStartedAt = 0;
 
 #define motionState motionState1
 #define stateStartedAt state1StartedAt
@@ -180,20 +270,35 @@ String jsonEscape(const String &value) {
 
 String motionStateText(MotionState st) {
     switch (st) {
-        case STATE_IDLE:                    return "Sẵn sàng";
-        case STATE_FORWARD:                 return "Đang quay thuận";
-        case STATE_PAUSE_AFTER_FORWARD:     return "Đang dừng";
-        case STATE_REVERSE:                 return "Đang quay nghịch";
-        case STATE_PAUSE_AFTER_REVERSE:     return "Đang dừng";
-        case STATE_MANUAL_FORWARD:          return "Test thuận";
-        case STATE_MANUAL_REVERSE:          return "Test nghịch";
-        case STATE_OPENING:                 return "Đang mở";
-        case STATE_OPENED:                  return "Đã mở";
-        case STATE_CLOSING:                 return "Đang đóng";
-        case STATE_CLOSED:                  return "Đã đóng";
-        case STATE_COMPLETE:                return "Hoàn thành";
-        case STATE_ERROR:                   return "Lỗi";
-        default:                            return "Không xác định";
+        case STATE_IDLE:                    return "San sang";
+        case STATE_FORWARD:                 return "Dang quay thuan";
+        case STATE_PAUSE_AFTER_FORWARD:     return "Dang dung";
+        case STATE_REVERSE:                 return "Dang quay nghich";
+        case STATE_PAUSE_AFTER_REVERSE:     return "Dang dung";
+        case STATE_MANUAL_FORWARD:          return "Test thuan";
+        case STATE_MANUAL_REVERSE:          return "Test nghich";
+        case STATE_OPENING:                 return "Dang mo";
+        case STATE_OPENED:                  return "Da mo";
+        case STATE_CLOSING:                 return "Dang dong";
+        case STATE_CLOSED:                  return "Da dong";
+        case STATE_COMPLETE:                return "Hoan thanh";
+        case STATE_ERROR:                   return "Loi";
+        default:                            return "Khong xac dinh";
+    }
+}
+
+String colDispenseStateText(ColumnDispenseState st) {
+    switch (st) {
+        case COL_IDLE:                     return "San sang";
+        case COL_DISPENSE_LOWER_OPEN:      return "Mo servo duoi";
+        case COL_DISPENSE_LOWER_HOLD:      return "Nha to ra";
+        case COL_DISPENSE_LOWER_CLOSE:     return "Dong servo duoi";
+        case COL_DISPENSE_PAUSE_MID:       return "Tam dung giua";
+        case COL_DISPENSE_UPPER_OPEN:      return "Mo servo tren";
+        case COL_DISPENSE_UPPER_HOLD:      return "To tren roi xuong";
+        case COL_DISPENSE_UPPER_CLOSE:     return "Khoa servo tren";
+        case COL_DISPENSE_COMPLETE:        return "Hoan tat tra do";
+        default:                           return "IDLE";
     }
 }
 
@@ -213,7 +318,9 @@ bool motionIsRunning(MotionState st) {
 }
 
 bool motionIsRunning() {
-    return motionIsRunning(motionState1) || motionIsRunning(motionState2);
+    return motionIsRunning(motionState1) || motionIsRunning(motionState2) ||
+           motionIsRunning(motionState3) || motionIsRunning(motionState4) ||
+           col1DispenseState != COL_IDLE || col2DispenseState != COL_IDLE;
 }
 
 bool parseIntStrict(const String &text, int &value) {
@@ -262,6 +369,7 @@ void lcdShow(
     String line2 = "",
     String line3 = ""
 ) {
+    if (!gfx) return;
     gfx->fillScreen(COLOR_BLACK);
     gfx->setTextColor(COLOR_CYAN);
     gfx->setTextSize(2);
@@ -285,39 +393,62 @@ void lcdShow(
     }
 }
 
-void updateLcdDual() {
+void updateLcdQuad() {
+    if (!gfx) return;
     gfx->fillScreen(COLOR_BLACK);
     gfx->setTextColor(COLOR_CYAN);
     gfx->setTextSize(2);
-    gfx->setCursor(10, 14);
-    gfx->println("ESP32 DUAL SERVO");
+    gfx->setCursor(10, 10);
+    gfx->println("ESP32 QUAD SERVO");
 
-    // S1 Line
     gfx->setTextSize(1);
+    // S1 Line (Column 1 Lower)
     gfx->setTextColor(motionIsRunning(motionState1) ? COLOR_GREEN : COLOR_YELLOW);
-    gfx->setCursor(10, 44);
-    gfx->println("S1(G1): " + motionStateText(motionState1) + " (" + String(currentCycle1) + "/" + String(cycles1) + ")");
+    gfx->setCursor(10, 34);
+    gfx->println("S1(C1-Low): " + motionStateText(motionState1) + " (" + String(currentCycle1) + "/" + String(cycles1) + ")");
 
-    // S2 Line
-    gfx->setTextColor(motionIsRunning(motionState2) ? COLOR_GREEN : COLOR_ORANGE);
-    gfx->setCursor(10, 68);
-    gfx->println("S2(G2): " + motionStateText(motionState2) + " (" + String(currentCycle2) + "/" + String(cycles2) + ")");
+    // S2 Line (Column 1 Upper)
+    gfx->setTextColor(motionIsRunning(motionState2) ? COLOR_GREEN : COLOR_YELLOW);
+    gfx->setCursor(10, 54);
+    gfx->println("S2(C1-Up) : " + motionStateText(motionState2) + " (" + String(currentCycle2) + "/" + String(cycles2) + ")");
+
+    // S3 Line (Column 2 Lower)
+    gfx->setTextColor(motionIsRunning(motionState3) ? COLOR_GREEN : COLOR_ORANGE);
+    gfx->setCursor(10, 74);
+    gfx->println("S3(C2-Low): " + motionStateText(motionState3) + " (" + String(currentCycle3) + "/" + String(cycles3) + ")");
+
+    // S4 Line (Column 2 Upper)
+    gfx->setTextColor(motionIsRunning(motionState4) ? COLOR_GREEN : COLOR_ORANGE);
+    gfx->setCursor(10, 94);
+    gfx->println("S4(C2-Up) : " + motionStateText(motionState4) + " (" + String(currentCycle4) + "/" + String(cycles4) + ")");
 
     // IR Bowl Sensor Line
     gfx->setTextColor(irDetected ? COLOR_RED : COLOR_GREEN);
-    gfx->setCursor(10, 92);
+    gfx->setCursor(10, 114);
     gfx->println("IR(G10): " + String(irDetected ? "TO DI QUA! [DETECTED]" : "THONG SUOT [CLEAR]") + " #" + String(irObjectCount));
 
-    // AP IP line
+    // Status / IP line
     gfx->setTextColor(COLOR_WHITE);
-    gfx->setCursor(10, 116);
-    gfx->println("AP: " + WiFi.softAPIP().toString() + (irAutoTriggerServo > 0 ? " [AUTO]" : ""));
+    gfx->setCursor(10, 134);
+    if (col1DispenseState != COL_IDLE) {
+        gfx->println("DISPENSE C1: " + colDispenseStateText(col1DispenseState));
+    } else if (col2DispenseState != COL_IDLE) {
+        gfx->println("DISPENSE C2: " + colDispenseStateText(col2DispenseState));
+    } else {
+        gfx->println("AP: " + WiFi.softAPIP().toString() + (irAutoTriggerServo > 0 ? " [AUTO]" : ""));
+    }
+}
+
+// Backwards compatibility alias
+void updateLcdDual() {
+    updateLcdQuad();
 }
 
 // ============================================================
-// 9. SERVO 1 LOW-LEVEL CONTROL (GPIO 1)
+// 9. SERVO LOW-LEVEL CONTROL (LAZY ATTACH & GROUND CLAMP)
 // ============================================================
 
+// --- SERVO 1 (GPIO 1 / GPIO 18) ---
 void attachServo1IfNeeded() {
     if (servo1Attached) return;
     servo1.setPeriodHertz(50);
@@ -333,10 +464,9 @@ void servo1StopNow() {
         servo1.detach();
         servo1Attached = false;
     }
-    // Active ground clamp for zero drift
     pinMode(SERVO_1_PIN, OUTPUT);
     digitalWrite(SERVO_1_PIN, LOW);
-    Serial.println("[SERVO1] STOP -> PWM DETACHED, GPIO 1 CLAMPED LOW");
+    Serial.println("[SERVO1] STOP -> PWM DETACHED, GPIO CLAMPED LOW");
 }
 
 void servo1ForwardNow() {
@@ -357,10 +487,7 @@ void servo1TestStopValue(int value) {
     Serial.println("[CALIB1] STOP TEST = " + String(value));
 }
 
-// ============================================================
-// 9B. SERVO 2 LOW-LEVEL CONTROL (GPIO 2)
-// ============================================================
-
+// --- SERVO 2 (GPIO 2 / GPIO 19) ---
 void attachServo2IfNeeded() {
     if (servo2Attached) return;
     servo2.setPeriodHertz(50);
@@ -376,10 +503,9 @@ void servo2StopNow() {
         servo2.detach();
         servo2Attached = false;
     }
-    // Active ground clamp for zero drift
     pinMode(SERVO_2_PIN, OUTPUT);
     digitalWrite(SERVO_2_PIN, LOW);
-    Serial.println("[SERVO2] STOP -> PWM DETACHED, GPIO 2 CLAMPED LOW");
+    Serial.println("[SERVO2] STOP -> PWM DETACHED, GPIO CLAMPED LOW");
 }
 
 void servo2ForwardNow() {
@@ -400,7 +526,85 @@ void servo2TestStopValue(int value) {
     Serial.println("[CALIB2] STOP TEST = " + String(value));
 }
 
-// Aliases for compatibility
+// --- SERVO 3 (GPIO 12 / GPIO 21) ---
+void attachServo3IfNeeded() {
+    if (servo3Attached) return;
+    servo3.setPeriodHertz(50);
+    servo3.attach(SERVO_3_PIN, 500, 2500);
+    servo3Attached = true;
+    delay(20);
+}
+
+void servo3StopNow() {
+    if (servo3Attached) {
+        servo3.write(servo3Stop);
+        delay(20);
+        servo3.detach();
+        servo3Attached = false;
+    }
+    pinMode(SERVO_3_PIN, OUTPUT);
+    digitalWrite(SERVO_3_PIN, LOW);
+    Serial.println("[SERVO3] STOP -> PWM DETACHED, GPIO CLAMPED LOW");
+}
+
+void servo3ForwardNow() {
+    attachServo3IfNeeded();
+    servo3.write(servo3Forward);
+    Serial.println("[SERVO3] FORWARD = " + String(servo3Forward));
+}
+
+void servo3ReverseNow() {
+    attachServo3IfNeeded();
+    servo3.write(servo3Reverse);
+    Serial.println("[SERVO3] REVERSE = " + String(servo3Reverse));
+}
+
+void servo3TestStopValue(int value) {
+    attachServo3IfNeeded();
+    servo3.write(value);
+    Serial.println("[CALIB3] STOP TEST = " + String(value));
+}
+
+// --- SERVO 4 (GPIO 13 / GPIO 22) ---
+void attachServo4IfNeeded() {
+    if (servo4Attached) return;
+    servo4.setPeriodHertz(50);
+    servo4.attach(SERVO_4_PIN, 500, 2500);
+    servo4Attached = true;
+    delay(20);
+}
+
+void servo4StopNow() {
+    if (servo4Attached) {
+        servo4.write(servo4Stop);
+        delay(20);
+        servo4.detach();
+        servo4Attached = false;
+    }
+    pinMode(SERVO_4_PIN, OUTPUT);
+    digitalWrite(SERVO_4_PIN, LOW);
+    Serial.println("[SERVO4] STOP -> PWM DETACHED, GPIO CLAMPED LOW");
+}
+
+void servo4ForwardNow() {
+    attachServo4IfNeeded();
+    servo4.write(servo4Forward);
+    Serial.println("[SERVO4] FORWARD = " + String(servo4Forward));
+}
+
+void servo4ReverseNow() {
+    attachServo4IfNeeded();
+    servo4.write(servo4Reverse);
+    Serial.println("[SERVO4] REVERSE = " + String(servo4Reverse));
+}
+
+void servo4TestStopValue(int value) {
+    attachServo4IfNeeded();
+    servo4.write(value);
+    Serial.println("[CALIB4] STOP TEST = " + String(value));
+}
+
+// Aliases for backwards compatibility
 void attachServoIfNeeded() { attachServo1IfNeeded(); }
 void servoStopNow() { servo1StopNow(); }
 void servoForwardNow() { servo1ForwardNow(); }
@@ -411,7 +615,7 @@ void servoTestStopValue(int val) { servo1TestStopValue(val); }
 // 10. HIGH-LEVEL MOTION ACTIONS
 // ============================================================
 
-// --- SERVO 1 ACTIONS ---
+// --- SERVO 1 ACTIONS (Column 1 Lower Gate) ---
 void startMotion1() {
     if (cycles1 < CYCLES_MIN) cycles1 = CYCLES_MIN;
     servo1StopNow();
@@ -420,7 +624,7 @@ void startMotion1() {
     state1StartedAt = millis();
     servo1ForwardNow();
     Serial.println("[MOTION1] START cycle=1/" + String(cycles1));
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void startOpen1() {
@@ -430,7 +634,7 @@ void startOpen1() {
     state1StartedAt = millis();
     servo1ForwardNow();
     Serial.println("[MOTION1] START OPENING (Forward=" + String(servo1Forward) + ", time=" + String(forwardMs1) + "ms)");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void startClose1() {
@@ -440,7 +644,7 @@ void startClose1() {
     state1StartedAt = millis();
     servo1ReverseNow();
     Serial.println("[MOTION1] START CLOSING (Reverse=" + String(servo1Reverse) + ", time=" + String(reverseMs1) + "ms)");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void stopMotion1() {
@@ -449,7 +653,7 @@ void stopMotion1() {
     currentCycle1 = 0;
     state1StartedAt = millis();
     Serial.println("[MOTION1] STOP -> IDLE");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void testForward1() {
@@ -459,7 +663,7 @@ void testForward1() {
     state1StartedAt = millis();
     servo1ForwardNow();
     Serial.println("[MOTION1] TEST FWD");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void testReverse1() {
@@ -469,16 +673,10 @@ void testReverse1() {
     state1StartedAt = millis();
     servo1ReverseNow();
     Serial.println("[MOTION1] TEST REV");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
-// Aliases for compatibility
-void startMotion() { startMotion1(); }
-void startOpen() { startOpen1(); }
-void startClose() { startClose1(); }
-void stopMotion() { stopMotion1(); }
-
-// --- SERVO 2 ACTIONS ---
+// --- SERVO 2 ACTIONS (Column 1 Upper Gate) ---
 void startMotion2() {
     if (cycles2 < CYCLES_MIN) cycles2 = CYCLES_MIN;
     servo2StopNow();
@@ -487,7 +685,7 @@ void startMotion2() {
     state2StartedAt = millis();
     servo2ForwardNow();
     Serial.println("[MOTION2] START cycle=1/" + String(cycles2));
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void startOpen2() {
@@ -497,7 +695,7 @@ void startOpen2() {
     state2StartedAt = millis();
     servo2ForwardNow();
     Serial.println("[MOTION2] START OPENING (Forward=" + String(servo2Forward) + ", time=" + String(forwardMs2) + "ms)");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void startClose2() {
@@ -507,7 +705,7 @@ void startClose2() {
     state2StartedAt = millis();
     servo2ReverseNow();
     Serial.println("[MOTION2] START CLOSING (Reverse=" + String(servo2Reverse) + ", time=" + String(reverseMs2) + "ms)");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void stopMotion2() {
@@ -516,7 +714,7 @@ void stopMotion2() {
     currentCycle2 = 0;
     state2StartedAt = millis();
     Serial.println("[MOTION2] STOP -> IDLE");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void testForward2() {
@@ -526,7 +724,7 @@ void testForward2() {
     state2StartedAt = millis();
     servo2ForwardNow();
     Serial.println("[MOTION2] TEST FWD");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
 void testReverse2() {
@@ -536,28 +734,187 @@ void testReverse2() {
     state2StartedAt = millis();
     servo2ReverseNow();
     Serial.println("[MOTION2] TEST REV");
-    updateLcdDual();
+    updateLcdQuad();
 }
 
-// --- COMBINED MASTER ACTIONS ---
+// --- SERVO 3 ACTIONS (Column 2 Lower Gate) ---
+void startMotion3() {
+    if (cycles3 < CYCLES_MIN) cycles3 = CYCLES_MIN;
+    servo3StopNow();
+    currentCycle3 = 1;
+    motionState3 = STATE_FORWARD;
+    state3StartedAt = millis();
+    servo3ForwardNow();
+    Serial.println("[MOTION3] START cycle=1/" + String(cycles3));
+    updateLcdQuad();
+}
+
+void startOpen3() {
+    servo3StopNow();
+    currentCycle3 = 0;
+    motionState3 = STATE_OPENING;
+    state3StartedAt = millis();
+    servo3ForwardNow();
+    Serial.println("[MOTION3] START OPENING (Forward=" + String(servo3Forward) + ", time=" + String(forwardMs3) + "ms)");
+    updateLcdQuad();
+}
+
+void startClose3() {
+    servo3StopNow();
+    currentCycle3 = 0;
+    motionState3 = STATE_CLOSING;
+    state3StartedAt = millis();
+    servo3ReverseNow();
+    Serial.println("[MOTION3] START CLOSING (Reverse=" + String(servo3Reverse) + ", time=" + String(reverseMs3) + "ms)");
+    updateLcdQuad();
+}
+
+void stopMotion3() {
+    servo3StopNow();
+    motionState3 = STATE_IDLE;
+    currentCycle3 = 0;
+    state3StartedAt = millis();
+    Serial.println("[MOTION3] STOP -> IDLE");
+    updateLcdQuad();
+}
+
+void testForward3() {
+    servo3StopNow();
+    currentCycle3 = 0;
+    motionState3 = STATE_MANUAL_FORWARD;
+    state3StartedAt = millis();
+    servo3ForwardNow();
+    Serial.println("[MOTION3] TEST FWD");
+    updateLcdQuad();
+}
+
+void testReverse3() {
+    servo3StopNow();
+    currentCycle3 = 0;
+    motionState3 = STATE_MANUAL_REVERSE;
+    state3StartedAt = millis();
+    servo3ReverseNow();
+    Serial.println("[MOTION3] TEST REV");
+    updateLcdQuad();
+}
+
+// --- SERVO 4 ACTIONS (Column 2 Upper Gate) ---
+void startMotion4() {
+    if (cycles4 < CYCLES_MIN) cycles4 = CYCLES_MIN;
+    servo4StopNow();
+    currentCycle4 = 1;
+    motionState4 = STATE_FORWARD;
+    state4StartedAt = millis();
+    servo4ForwardNow();
+    Serial.println("[MOTION4] START cycle=1/" + String(cycles4));
+    updateLcdQuad();
+}
+
+void startOpen4() {
+    servo4StopNow();
+    currentCycle4 = 0;
+    motionState4 = STATE_OPENING;
+    state4StartedAt = millis();
+    servo4ForwardNow();
+    Serial.println("[MOTION4] START OPENING (Forward=" + String(servo4Forward) + ", time=" + String(forwardMs4) + "ms)");
+    updateLcdQuad();
+}
+
+void startClose4() {
+    servo4StopNow();
+    currentCycle4 = 0;
+    motionState4 = STATE_CLOSING;
+    state4StartedAt = millis();
+    servo4ReverseNow();
+    Serial.println("[MOTION4] START CLOSING (Reverse=" + String(servo4Reverse) + ", time=" + String(reverseMs4) + "ms)");
+    updateLcdQuad();
+}
+
+void stopMotion4() {
+    servo4StopNow();
+    motionState4 = STATE_IDLE;
+    currentCycle4 = 0;
+    state4StartedAt = millis();
+    Serial.println("[MOTION4] STOP -> IDLE");
+    updateLcdQuad();
+}
+
+void testForward4() {
+    servo4StopNow();
+    currentCycle4 = 0;
+    motionState4 = STATE_MANUAL_FORWARD;
+    state4StartedAt = millis();
+    servo4ForwardNow();
+    Serial.println("[MOTION4] TEST FWD");
+    updateLcdQuad();
+}
+
+void testReverse4() {
+    servo4StopNow();
+    currentCycle4 = 0;
+    motionState4 = STATE_MANUAL_REVERSE;
+    state4StartedAt = millis();
+    servo4ReverseNow();
+    Serial.println("[MOTION4] TEST REV");
+    updateLcdQuad();
+}
+
+// Aliases for compatibility
+void startMotion() { startMotion1(); }
+void startOpen() { startOpen1(); }
+void startClose() { startClose1(); }
+void stopMotion() { stopMotion1(); }
+
+// --- FIFO COLUMN DISPENSE MASTER ACTIONS ---
+void startDispenseCol1() {
+    stopMotion1();
+    stopMotion2();
+    col1DispenseState = COL_DISPENSE_LOWER_OPEN;
+    col1DispenseStartedAt = millis();
+    startOpen1();
+    Serial.println("[COL1] START FIFO DISPENSE SEQUENCE (Column 1: Tao - Apple)");
+    updateLcdQuad();
+}
+
+void startDispenseCol2() {
+    stopMotion3();
+    stopMotion4();
+    col2DispenseState = COL_DISPENSE_LOWER_OPEN;
+    col2DispenseStartedAt = millis();
+    startOpen3();
+    Serial.println("[COL2] START FIFO DISPENSE SEQUENCE (Column 2: Dua Luoi - Melon)");
+    updateLcdQuad();
+}
+
+// --- COMBINED MASTER ACTIONS (ALL 4 SERVOS) ---
 void startAll() {
     startMotion1();
     startMotion2();
+    startMotion3();
+    startMotion4();
 }
 
 void stopAll() {
     stopMotion1();
     stopMotion2();
+    stopMotion3();
+    stopMotion4();
+    col1DispenseState = COL_IDLE;
+    col2DispenseState = COL_IDLE;
 }
 
 void openAll() {
     startOpen1();
     startOpen2();
+    startOpen3();
+    startOpen4();
 }
 
 void closeAll() {
     startClose1();
     startClose2();
+    startClose3();
+    startClose4();
 }
 
 // ============================================================
@@ -574,7 +931,7 @@ void updateMotion1() {
                 servo1StopNow();
                 motionState1 = STATE_PAUSE_AFTER_FORWARD;
                 state1StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -583,7 +940,7 @@ void updateMotion1() {
                 servo1ReverseNow();
                 motionState1 = STATE_REVERSE;
                 state1StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -592,7 +949,7 @@ void updateMotion1() {
                 servo1StopNow();
                 motionState1 = STATE_PAUSE_AFTER_REVERSE;
                 state1StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -603,13 +960,13 @@ void updateMotion1() {
                     motionState1 = STATE_COMPLETE;
                     state1StartedAt = millis();
                     Serial.println("[MOTION1] COMPLETE");
-                    updateLcdDual();
+                    updateLcdQuad();
                 } else {
                     currentCycle1++;
                     motionState1 = STATE_FORWARD;
                     state1StartedAt = millis();
                     servo1ForwardNow();
-                    updateLcdDual();
+                    updateLcdQuad();
                 }
             }
             break;
@@ -620,7 +977,7 @@ void updateMotion1() {
                 motionState1 = STATE_OPENED;
                 state1StartedAt = millis();
                 Serial.println("[MOTION1] OPENED -> HOLDING");
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -630,7 +987,7 @@ void updateMotion1() {
                 motionState1 = STATE_CLOSED;
                 state1StartedAt = millis();
                 Serial.println("[MOTION1] CLOSED -> HOLDING");
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -649,7 +1006,7 @@ void updateMotion2() {
                 servo2StopNow();
                 motionState2 = STATE_PAUSE_AFTER_FORWARD;
                 state2StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -658,7 +1015,7 @@ void updateMotion2() {
                 servo2ReverseNow();
                 motionState2 = STATE_REVERSE;
                 state2StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -667,7 +1024,7 @@ void updateMotion2() {
                 servo2StopNow();
                 motionState2 = STATE_PAUSE_AFTER_REVERSE;
                 state2StartedAt = millis();
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -678,13 +1035,13 @@ void updateMotion2() {
                     motionState2 = STATE_COMPLETE;
                     state2StartedAt = millis();
                     Serial.println("[MOTION2] COMPLETE");
-                    updateLcdDual();
+                    updateLcdQuad();
                 } else {
                     currentCycle2++;
                     motionState2 = STATE_FORWARD;
                     state2StartedAt = millis();
                     servo2ForwardNow();
-                    updateLcdDual();
+                    updateLcdQuad();
                 }
             }
             break;
@@ -695,7 +1052,7 @@ void updateMotion2() {
                 motionState2 = STATE_OPENED;
                 state2StartedAt = millis();
                 Serial.println("[MOTION2] OPENED -> HOLDING");
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -705,7 +1062,7 @@ void updateMotion2() {
                 motionState2 = STATE_CLOSED;
                 state2StartedAt = millis();
                 Serial.println("[MOTION2] CLOSED -> HOLDING");
-                updateLcdDual();
+                updateLcdQuad();
             }
             break;
 
@@ -714,9 +1071,306 @@ void updateMotion2() {
     }
 }
 
+void updateMotion3() {
+    if (!motionIsRunning(motionState3)) return;
+    unsigned long elapsed = millis() - state3StartedAt;
+
+    switch (motionState3) {
+        case STATE_FORWARD:
+            if (elapsed >= forwardMs3) {
+                servo3StopNow();
+                motionState3 = STATE_PAUSE_AFTER_FORWARD;
+                state3StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_PAUSE_AFTER_FORWARD:
+            if (elapsed >= pauseMs3) {
+                servo3ReverseNow();
+                motionState3 = STATE_REVERSE;
+                state3StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_REVERSE:
+            if (elapsed >= reverseMs3) {
+                servo3StopNow();
+                motionState3 = STATE_PAUSE_AFTER_REVERSE;
+                state3StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_PAUSE_AFTER_REVERSE:
+            if (elapsed >= pauseMs3) {
+                if (currentCycle3 >= cycles3) {
+                    servo3StopNow();
+                    motionState3 = STATE_COMPLETE;
+                    state3StartedAt = millis();
+                    Serial.println("[MOTION3] COMPLETE");
+                    updateLcdQuad();
+                } else {
+                    currentCycle3++;
+                    motionState3 = STATE_FORWARD;
+                    state3StartedAt = millis();
+                    servo3ForwardNow();
+                    updateLcdQuad();
+                }
+            }
+            break;
+
+        case STATE_OPENING:
+            if (elapsed >= forwardMs3) {
+                servo3StopNow();
+                motionState3 = STATE_OPENED;
+                state3StartedAt = millis();
+                Serial.println("[MOTION3] OPENED -> HOLDING");
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_CLOSING:
+            if (elapsed >= reverseMs3) {
+                servo3StopNow();
+                motionState3 = STATE_CLOSED;
+                state3StartedAt = millis();
+                Serial.println("[MOTION3] CLOSED -> HOLDING");
+                updateLcdQuad();
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+void updateMotion4() {
+    if (!motionIsRunning(motionState4)) return;
+    unsigned long elapsed = millis() - state4StartedAt;
+
+    switch (motionState4) {
+        case STATE_FORWARD:
+            if (elapsed >= forwardMs4) {
+                servo4StopNow();
+                motionState4 = STATE_PAUSE_AFTER_FORWARD;
+                state4StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_PAUSE_AFTER_FORWARD:
+            if (elapsed >= pauseMs4) {
+                servo4ReverseNow();
+                motionState4 = STATE_REVERSE;
+                state4StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_REVERSE:
+            if (elapsed >= reverseMs4) {
+                servo4StopNow();
+                motionState4 = STATE_PAUSE_AFTER_REVERSE;
+                state4StartedAt = millis();
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_PAUSE_AFTER_REVERSE:
+            if (elapsed >= pauseMs4) {
+                if (currentCycle4 >= cycles4) {
+                    servo4StopNow();
+                    motionState4 = STATE_COMPLETE;
+                    state4StartedAt = millis();
+                    Serial.println("[MOTION4] COMPLETE");
+                    updateLcdQuad();
+                } else {
+                    currentCycle4++;
+                    motionState4 = STATE_FORWARD;
+                    state4StartedAt = millis();
+                    servo4ForwardNow();
+                    updateLcdQuad();
+                }
+            }
+            break;
+
+        case STATE_OPENING:
+            if (elapsed >= forwardMs4) {
+                servo4StopNow();
+                motionState4 = STATE_OPENED;
+                state4StartedAt = millis();
+                Serial.println("[MOTION4] OPENED -> HOLDING");
+                updateLcdQuad();
+            }
+            break;
+
+        case STATE_CLOSING:
+            if (elapsed >= reverseMs4) {
+                servo4StopNow();
+                motionState4 = STATE_CLOSED;
+                state4StartedAt = millis();
+                Serial.println("[MOTION4] CLOSED -> HOLDING");
+                updateLcdQuad();
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+// --- FIFO COLUMN DISPENSE ENGINE ---
+void updateColumnDispense() {
+    unsigned long now = millis();
+
+    // Column 1 Sequence: S1 (Lower) and S2 (Upper)
+    if (col1DispenseState != COL_IDLE) {
+        unsigned long elapsed = now - col1DispenseStartedAt;
+        switch (col1DispenseState) {
+            case COL_DISPENSE_LOWER_OPEN:
+                if (motionState1 == STATE_OPENED || elapsed >= forwardMs1) {
+                    col1DispenseState = COL_DISPENSE_LOWER_HOLD;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] LOWER GATE OPENED -> HOLDING FOR BOWL RELEASE");
+                }
+                break;
+
+            case COL_DISPENSE_LOWER_HOLD:
+                // Hold open 600ms so bowl falls down
+                if (elapsed >= 600) {
+                    startClose1();
+                    col1DispenseState = COL_DISPENSE_LOWER_CLOSE;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] CLOSING LOWER GATE");
+                }
+                break;
+
+            case COL_DISPENSE_LOWER_CLOSE:
+                if (motionState1 == STATE_CLOSED || elapsed >= reverseMs1) {
+                    col1DispenseState = COL_DISPENSE_PAUSE_MID;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] LOWER GATE CLOSED -> PAUSING BEFORE UPPER REFILL");
+                }
+                break;
+
+            case COL_DISPENSE_PAUSE_MID:
+                if (elapsed >= 300) {
+                    startOpen2(); // Open Upper Gate to refill
+                    col1DispenseState = COL_DISPENSE_UPPER_OPEN;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] OPENING UPPER GATE TO REFILL NEXT BOWL");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_OPEN:
+                if (motionState2 == STATE_OPENED || elapsed >= forwardMs2) {
+                    col1DispenseState = COL_DISPENSE_UPPER_HOLD;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] UPPER GATE OPENED -> HOLDING FOR REFILL DROP");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_HOLD:
+                if (elapsed >= 600) {
+                    startClose2();
+                    col1DispenseState = COL_DISPENSE_UPPER_CLOSE;
+                    col1DispenseStartedAt = now;
+                    Serial.println("[COL1] CLOSING UPPER GATE TO LOCK COLUMN");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_CLOSE:
+                if (motionState2 == STATE_CLOSED || elapsed >= reverseMs2) {
+                    col1DispenseState = COL_IDLE;
+                    Serial.println("[COL1] FIFO DISPENSE & REFILL SUCCESSFUL!");
+                    updateLcdQuad();
+                }
+                break;
+
+            default:
+                col1DispenseState = COL_IDLE;
+                break;
+        }
+    }
+
+    // Column 2 Sequence: S3 (Lower) and S4 (Upper)
+    if (col2DispenseState != COL_IDLE) {
+        unsigned long elapsed = now - col2DispenseStartedAt;
+        switch (col2DispenseState) {
+            case COL_DISPENSE_LOWER_OPEN:
+                if (motionState3 == STATE_OPENED || elapsed >= forwardMs3) {
+                    col2DispenseState = COL_DISPENSE_LOWER_HOLD;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] LOWER GATE OPENED -> HOLDING FOR BOWL RELEASE");
+                }
+                break;
+
+            case COL_DISPENSE_LOWER_HOLD:
+                if (elapsed >= 600) {
+                    startClose3();
+                    col2DispenseState = COL_DISPENSE_LOWER_CLOSE;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] CLOSING LOWER GATE");
+                }
+                break;
+
+            case COL_DISPENSE_LOWER_CLOSE:
+                if (motionState3 == STATE_CLOSED || elapsed >= reverseMs3) {
+                    col2DispenseState = COL_DISPENSE_PAUSE_MID;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] LOWER GATE CLOSED -> PAUSING BEFORE UPPER REFILL");
+                }
+                break;
+
+            case COL_DISPENSE_PAUSE_MID:
+                if (elapsed >= 300) {
+                    startOpen4(); // Open Upper Gate to refill
+                    col2DispenseState = COL_DISPENSE_UPPER_OPEN;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] OPENING UPPER GATE TO REFILL NEXT BOWL");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_OPEN:
+                if (motionState4 == STATE_OPENED || elapsed >= forwardMs4) {
+                    col2DispenseState = COL_DISPENSE_UPPER_HOLD;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] UPPER GATE OPENED -> HOLDING FOR REFILL DROP");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_HOLD:
+                if (elapsed >= 600) {
+                    startClose4();
+                    col2DispenseState = COL_DISPENSE_UPPER_CLOSE;
+                    col2DispenseStartedAt = now;
+                    Serial.println("[COL2] CLOSING UPPER GATE TO LOCK COLUMN");
+                }
+                break;
+
+            case COL_DISPENSE_UPPER_CLOSE:
+                if (motionState4 == STATE_CLOSED || elapsed >= reverseMs4) {
+                    col2DispenseState = COL_IDLE;
+                    Serial.println("[COL2] FIFO DISPENSE & REFILL SUCCESSFUL!");
+                    updateLcdQuad();
+                }
+                break;
+
+            default:
+                col2DispenseState = COL_IDLE;
+                break;
+        }
+    }
+}
+
 void updateMotion() {
     updateMotion1();
     updateMotion2();
+    updateMotion3();
+    updateMotion4();
+    updateColumnDispense();
 }
 
 // ============================================================
@@ -755,50 +1409,47 @@ void updateIrSensor() {
 
                 Serial.printf("[IR] BOWL DETECTED! Count = %u (GPIO 10)\n", irObjectCount);
 
-                // Auto-trigger servo if configured
+                // Auto-trigger actions if configured
                 if (irAutoTriggerServo == 1) {
-                    if (!motionIsRunning(motionState1)) {
-                        Serial.println("[IR->AUTO] Auto-triggering Servo 1 (Open)");
-                        startOpen1();
-                    }
+                    if (!motionIsRunning(motionState1)) startOpen1();
                 } else if (irAutoTriggerServo == 2) {
-                    if (!motionIsRunning(motionState2)) {
-                        Serial.println("[IR->AUTO] Auto-triggering Servo 2 (Open)");
-                        startOpen2();
-                    }
+                    if (!motionIsRunning(motionState2)) startOpen2();
                 } else if (irAutoTriggerServo == 3) {
-                    Serial.println("[IR->AUTO] Auto-triggering All Servos (Open)");
                     openAll();
+                } else if (irAutoTriggerServo == 4) {
+                    startDispenseCol1();
+                } else if (irAutoTriggerServo == 5) {
+                    startDispenseCol2();
                 }
 
-                updateLcdDual();
+                updateLcdQuad();
             } else if (!irStableReading && irDetected) {
                 // FALLING EDGE: Bowl has passed through
                 irDetected = false;
                 irBlockDurationMs = now - irBlockStartMs;
                 Serial.printf("[IR] BEAM CLEAR! Bowl passed through in %lu ms\n", irBlockDurationMs);
-                updateLcdDual();
+                updateLcdQuad();
             }
         }
     } else {
         irLastStateChangeMs = now;
         if (irDetected) {
             irBlockDurationMs = now - irBlockStartMs;
-            // Auto-clear simulated pulses
             if (!irStableReading && (now - irLastDetectionMs > 600)) {
                 irDetected = false;
                 Serial.printf("[IR] BEAM CLEAR! Bowl passed through in %lu ms\n", irBlockDurationMs);
-                updateLcdDual();
+                updateLcdQuad();
             }
         }
     }
 }
 
 // ============================================================
-// 12. PREFERENCES (NVS PERSISTENCE)
+// 12. PREFERENCES (NVS PERSISTENCE FOR 4 SERVOS)
 // ============================================================
 
 void setDefaultConfig() {
+    // S1
     servo1Stop = 90;
     servo1Forward = 110;
     servo1Reverse = 70;
@@ -807,6 +1458,7 @@ void setDefaultConfig() {
     pauseMs1 = 500;
     cycles1 = 1;
 
+    // S2
     servo2Stop = 90;
     servo2Forward = 110;
     servo2Reverse = 70;
@@ -814,6 +1466,24 @@ void setDefaultConfig() {
     reverseMs2 = 1000;
     pauseMs2 = 500;
     cycles2 = 1;
+
+    // S3
+    servo3Stop = 90;
+    servo3Forward = 110;
+    servo3Reverse = 70;
+    forwardMs3 = 1000;
+    reverseMs3 = 1000;
+    pauseMs3 = 500;
+    cycles3 = 1;
+
+    // S4
+    servo4Stop = 90;
+    servo4Forward = 110;
+    servo4Reverse = 70;
+    forwardMs4 = 1000;
+    reverseMs4 = 1000;
+    pauseMs4 = 500;
+    cycles4 = 1;
 
     irAutoTriggerServo = 0;
     irActiveLow = true;
@@ -841,12 +1511,30 @@ void saveConfig() {
     preferences.putULong("pauseMs2", pauseMs2);
     preferences.putInt("cycles2", cycles2);
 
+    // Servo 3
+    preferences.putInt("stop3", servo3Stop);
+    preferences.putInt("fwd3", servo3Forward);
+    preferences.putInt("rev3", servo3Reverse);
+    preferences.putULong("fwdMs3", forwardMs3);
+    preferences.putULong("revMs3", reverseMs3);
+    preferences.putULong("pauseMs3", pauseMs3);
+    preferences.putInt("cycles3", cycles3);
+
+    // Servo 4
+    preferences.putInt("stop4", servo4Stop);
+    preferences.putInt("fwd4", servo4Forward);
+    preferences.putInt("rev4", servo4Reverse);
+    preferences.putULong("fwdMs4", forwardMs4);
+    preferences.putULong("revMs4", reverseMs4);
+    preferences.putULong("pauseMs4", pauseMs4);
+    preferences.putInt("cycles4", cycles4);
+
     // IR Sensor settings
     preferences.putInt("irAuto", irAutoTriggerServo);
     preferences.putBool("irActiveLow", irActiveLow);
 
     preferences.end();
-    Serial.println("[CONFIG] Saved dual-servo and IR configuration to Preferences");
+    Serial.println("[CONFIG] Saved quad-servo (4 channels) and IR configuration to Preferences");
 }
 
 void loadConfig() {
@@ -857,7 +1545,7 @@ void loadConfig() {
         preferences.end();
         setDefaultConfig();
         saveConfig();
-        Serial.println("[CONFIG] Old/missing schema -> defaults applied for S1, S2 & IR");
+        Serial.println("[CONFIG] Old/missing schema -> defaults applied for S1..S4 & IR");
         return;
     }
 
@@ -878,6 +1566,24 @@ void loadConfig() {
     reverseMs2 = preferences.getULong("revMs2", 1000);
     pauseMs2 = preferences.getULong("pauseMs2", 500);
     cycles2 = preferences.getInt("cycles2", 1);
+
+    // Load S3
+    servo3Stop = preferences.getInt("stop3", 90);
+    servo3Forward = preferences.getInt("fwd3", 110);
+    servo3Reverse = preferences.getInt("rev3", 70);
+    forwardMs3 = preferences.getULong("fwdMs3", 1000);
+    reverseMs3 = preferences.getULong("revMs3", 1000);
+    pauseMs3 = preferences.getULong("pauseMs3", 500);
+    cycles3 = preferences.getInt("cycles3", 1);
+
+    // Load S4
+    servo4Stop = preferences.getInt("stop4", 90);
+    servo4Forward = preferences.getInt("fwd4", 110);
+    servo4Reverse = preferences.getInt("rev4", 70);
+    forwardMs4 = preferences.getULong("fwdMs4", 1000);
+    reverseMs4 = preferences.getULong("revMs4", 1000);
+    pauseMs4 = preferences.getULong("pauseMs4", 500);
+    cycles4 = preferences.getInt("cycles4", 1);
 
     // Load IR
     irAutoTriggerServo = preferences.getInt("irAuto", 0);
@@ -903,7 +1609,25 @@ void loadConfig() {
     if (pauseMs2 > MOTION_TIME_MAX) pauseMs2 = 500;
     if (cycles2 < CYCLES_MIN || cycles2 > CYCLES_MAX) cycles2 = 1;
 
-    Serial.println("[CONFIG] Dual-servo & IR configuration loaded");
+    // Constrain S3
+    servo3Stop = constrain(servo3Stop, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo3Forward = constrain(servo3Forward, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo3Reverse = constrain(servo3Reverse, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    if (forwardMs3 < MOTION_TIME_MIN || forwardMs3 > MOTION_TIME_MAX) forwardMs3 = 1000;
+    if (reverseMs3 < MOTION_TIME_MIN || reverseMs3 > MOTION_TIME_MAX) reverseMs3 = 1000;
+    if (pauseMs3 > MOTION_TIME_MAX) pauseMs3 = 500;
+    if (cycles3 < CYCLES_MIN || cycles3 > CYCLES_MAX) cycles3 = 1;
+
+    // Constrain S4
+    servo4Stop = constrain(servo4Stop, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo4Forward = constrain(servo4Forward, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo4Reverse = constrain(servo4Reverse, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    if (forwardMs4 < MOTION_TIME_MIN || forwardMs4 > MOTION_TIME_MAX) forwardMs4 = 1000;
+    if (reverseMs4 < MOTION_TIME_MIN || reverseMs4 > MOTION_TIME_MAX) reverseMs4 = 1000;
+    if (pauseMs4 > MOTION_TIME_MAX) pauseMs4 = 500;
+    if (cycles4 < CYCLES_MIN || cycles4 > CYCLES_MAX) cycles4 = 1;
+
+    Serial.println("[CONFIG] Quad-servo (4 channels) & IR configuration loaded");
 }
 
 // ============================================================
@@ -922,9 +1646,9 @@ String makeConfigJson() {
     json += "\"pauseMs\":" + String(pauseMs1) + ",";
     json += "\"cycles\":" + String(cycles1) + ",";
 
-    // Dual channel details
+    // Servo 1
     json += "\"s1\":{";
-    json += "\"pin\":1,";
+    json += "\"pin\":" + String(SERVO_1_PIN) + ",";
     json += "\"stop\":" + String(servo1Stop) + ",";
     json += "\"forward\":" + String(servo1Forward) + ",";
     json += "\"reverse\":" + String(servo1Reverse) + ",";
@@ -934,8 +1658,9 @@ String makeConfigJson() {
     json += "\"cycles\":" + String(cycles1);
     json += "},";
 
+    // Servo 2
     json += "\"s2\":{";
-    json += "\"pin\":2,";
+    json += "\"pin\":" + String(SERVO_2_PIN) + ",";
     json += "\"stop\":" + String(servo2Stop) + ",";
     json += "\"forward\":" + String(servo2Forward) + ",";
     json += "\"reverse\":" + String(servo2Reverse) + ",";
@@ -943,6 +1668,30 @@ String makeConfigJson() {
     json += "\"reverseMs\":" + String(reverseMs2) + ",";
     json += "\"pauseMs\":" + String(pauseMs2) + ",";
     json += "\"cycles\":" + String(cycles2);
+    json += "},";
+
+    // Servo 3
+    json += "\"s3\":{";
+    json += "\"pin\":" + String(SERVO_3_PIN) + ",";
+    json += "\"stop\":" + String(servo3Stop) + ",";
+    json += "\"forward\":" + String(servo3Forward) + ",";
+    json += "\"reverse\":" + String(servo3Reverse) + ",";
+    json += "\"forwardMs\":" + String(forwardMs3) + ",";
+    json += "\"reverseMs\":" + String(reverseMs3) + ",";
+    json += "\"pauseMs\":" + String(pauseMs3) + ",";
+    json += "\"cycles\":" + String(cycles3);
+    json += "},";
+
+    // Servo 4
+    json += "\"s4\":{";
+    json += "\"pin\":" + String(SERVO_4_PIN) + ",";
+    json += "\"stop\":" + String(servo4Stop) + ",";
+    json += "\"forward\":" + String(servo4Forward) + ",";
+    json += "\"reverse\":" + String(servo4Reverse) + ",";
+    json += "\"forwardMs\":" + String(forwardMs4) + ",";
+    json += "\"reverseMs\":" + String(reverseMs4) + ",";
+    json += "\"pauseMs\":" + String(pauseMs4) + ",";
+    json += "\"cycles\":" + String(cycles4);
     json += "}";
 
     json += "}";
@@ -964,9 +1713,9 @@ String makeStatusJson() {
     json += "\"pauseMs\":" + String(pauseMs1) + ",";
     json += "\"ip\":\"" + jsonEscape(WiFi.softAPIP().toString()) + "\",";
 
-    // Servo 1 telemetry
+    // Servo 1
     json += "\"s1\":{";
-    json += "\"pin\":1,";
+    json += "\"pin\":" + String(SERVO_1_PIN) + ",";
     json += "\"state\":\"" + jsonEscape(motionStateText(motionState1)) + "\",";
     json += "\"running\":" + String(motionIsRunning(motionState1) ? "true" : "false") + ",";
     json += "\"cycle\":" + String(currentCycle1) + ",";
@@ -979,9 +1728,9 @@ String makeStatusJson() {
     json += "\"pauseMs\":" + String(pauseMs1);
     json += "},";
 
-    // Servo 2 telemetry
+    // Servo 2
     json += "\"s2\":{";
-    json += "\"pin\":2,";
+    json += "\"pin\":" + String(SERVO_2_PIN) + ",";
     json += "\"state\":\"" + jsonEscape(motionStateText(motionState2)) + "\",";
     json += "\"running\":" + String(motionIsRunning(motionState2) ? "true" : "false") + ",";
     json += "\"cycle\":" + String(currentCycle2) + ",";
@@ -992,6 +1741,47 @@ String makeStatusJson() {
     json += "\"forwardMs\":" + String(forwardMs2) + ",";
     json += "\"reverseMs\":" + String(reverseMs2) + ",";
     json += "\"pauseMs\":" + String(pauseMs2);
+    json += "},";
+
+    // Servo 3
+    json += "\"s3\":{";
+    json += "\"pin\":" + String(SERVO_3_PIN) + ",";
+    json += "\"state\":\"" + jsonEscape(motionStateText(motionState3)) + "\",";
+    json += "\"running\":" + String(motionIsRunning(motionState3) ? "true" : "false") + ",";
+    json += "\"cycle\":" + String(currentCycle3) + ",";
+    json += "\"cycles\":" + String(cycles3) + ",";
+    json += "\"stop\":" + String(servo3Stop) + ",";
+    json += "\"forward\":" + String(servo3Forward) + ",";
+    json += "\"reverse\":" + String(servo3Reverse) + ",";
+    json += "\"forwardMs\":" + String(forwardMs3) + ",";
+    json += "\"reverseMs\":" + String(reverseMs3) + ",";
+    json += "\"pauseMs\":" + String(pauseMs3);
+    json += "},";
+
+    // Servo 4
+    json += "\"s4\":{";
+    json += "\"pin\":" + String(SERVO_4_PIN) + ",";
+    json += "\"state\":\"" + jsonEscape(motionStateText(motionState4)) + "\",";
+    json += "\"running\":" + String(motionIsRunning(motionState4) ? "true" : "false") + ",";
+    json += "\"cycle\":" + String(currentCycle4) + ",";
+    json += "\"cycles\":" + String(cycles4) + ",";
+    json += "\"stop\":" + String(servo4Stop) + ",";
+    json += "\"forward\":" + String(servo4Forward) + ",";
+    json += "\"reverse\":" + String(servo4Reverse) + ",";
+    json += "\"forwardMs\":" + String(forwardMs4) + ",";
+    json += "\"reverseMs\":" + String(reverseMs4) + ",";
+    json += "\"pauseMs\":" + String(pauseMs4);
+    json += "},";
+
+    // Columns
+    json += "\"col1\":{";
+    json += "\"state\":\"" + jsonEscape(colDispenseStateText(col1DispenseState)) + "\",";
+    json += "\"running\":" + String(col1DispenseState != COL_IDLE ? "true" : "false");
+    json += "},";
+
+    json += "\"col2\":{";
+    json += "\"state\":\"" + jsonEscape(colDispenseStateText(col2DispenseState)) + "\",";
+    json += "\"running\":" + String(col2DispenseState != COL_IDLE ? "true" : "false");
     json += "},";
 
     // IR Sensor telemetry
@@ -1033,7 +1823,7 @@ void handleGetConfig() {
 
 void handleFactoryReset() {
     if (motionIsRunning()) {
-        sendJsonError(409, "Không thể khôi phục khi Servo đang chạy");
+        sendJsonError(409, "Khong the khoi phuc khi Servo dang chay");
         return;
     }
     stopAll();
@@ -1041,25 +1831,31 @@ void handleFactoryReset() {
     saveConfig();
     servo1StopNow();
     servo2StopNow();
+    servo3StopNow();
+    servo4StopNow();
     server.send(200, "application/json; charset=utf-8", makeConfigJson());
 }
 
 void handleConfig() {
-    // Allows updating S1, S2, or both
     int pStop1 = servo1Stop, pFwd1 = servo1Forward, pRev1 = servo1Reverse, pCyc1 = cycles1;
     unsigned long pFwdMs1 = forwardMs1, pRevMs1 = reverseMs1, pPauseMs1 = pauseMs1;
     int pStop2 = servo2Stop, pFwd2 = servo2Forward, pRev2 = servo2Reverse, pCyc2 = cycles2;
     unsigned long pFwdMs2 = forwardMs2, pRevMs2 = reverseMs2, pPauseMs2 = pauseMs2;
+    int pStop3 = servo3Stop, pFwd3 = servo3Forward, pRev3 = servo3Reverse, pCyc3 = cycles3;
+    unsigned long pFwdMs3 = forwardMs3, pRevMs3 = reverseMs3, pPauseMs3 = pauseMs3;
+    int pStop4 = servo4Stop, pFwd4 = servo4Forward, pRev4 = servo4Reverse, pCyc4 = cycles4;
+    unsigned long pFwdMs4 = forwardMs4, pRevMs4 = reverseMs4, pPauseMs4 = pauseMs4;
 
-    if (server.hasArg("stop")) pStop1 = server.arg("stop").toInt();
-    if (server.hasArg("forward")) pFwd1 = server.arg("forward").toInt();
-    if (server.hasArg("reverse")) pRev1 = server.arg("reverse").toInt();
-    if (server.hasArg("forwardMs")) pFwdMs1 = strtoul(server.arg("forwardMs").c_str(), NULL, 10);
-    if (server.hasArg("reverseMs")) pRevMs1 = strtoul(server.arg("reverseMs").c_str(), NULL, 10);
-    if (server.hasArg("pauseMs")) pPauseMs1 = strtoul(server.arg("pauseMs").c_str(), NULL, 10);
-    if (server.hasArg("cycles")) pCyc1 = server.arg("cycles").toInt();
+    // S1 args
+    if (server.hasArg("stop") || server.hasArg("stop1")) pStop1 = (server.hasArg("stop1") ? server.arg("stop1") : server.arg("stop")).toInt();
+    if (server.hasArg("forward") || server.hasArg("forward1")) pFwd1 = (server.hasArg("forward1") ? server.arg("forward1") : server.arg("forward")).toInt();
+    if (server.hasArg("reverse") || server.hasArg("reverse1")) pRev1 = (server.hasArg("reverse1") ? server.arg("reverse1") : server.arg("reverse")).toInt();
+    if (server.hasArg("forwardMs") || server.hasArg("forwardMs1")) pFwdMs1 = strtoul((server.hasArg("forwardMs1") ? server.arg("forwardMs1") : server.arg("forwardMs")).c_str(), NULL, 10);
+    if (server.hasArg("reverseMs") || server.hasArg("reverseMs1")) pRevMs1 = strtoul((server.hasArg("reverseMs1") ? server.arg("reverseMs1") : server.arg("reverseMs")).c_str(), NULL, 10);
+    if (server.hasArg("pauseMs") || server.hasArg("pauseMs1")) pPauseMs1 = strtoul((server.hasArg("pauseMs1") ? server.arg("pauseMs1") : server.arg("pauseMs")).c_str(), NULL, 10);
+    if (server.hasArg("cycles") || server.hasArg("cycles1")) pCyc1 = (server.hasArg("cycles1") ? server.arg("cycles1") : server.arg("cycles")).toInt();
 
-    // S2 specific args
+    // S2 args
     if (server.hasArg("stop2")) pStop2 = server.arg("stop2").toInt();
     if (server.hasArg("forward2")) pFwd2 = server.arg("forward2").toInt();
     if (server.hasArg("reverse2")) pRev2 = server.arg("reverse2").toInt();
@@ -1068,8 +1864,26 @@ void handleConfig() {
     if (server.hasArg("pauseMs2")) pPauseMs2 = strtoul(server.arg("pauseMs2").c_str(), NULL, 10);
     if (server.hasArg("cycles2")) pCyc2 = server.arg("cycles2").toInt();
 
+    // S3 args
+    if (server.hasArg("stop3")) pStop3 = server.arg("stop3").toInt();
+    if (server.hasArg("forward3")) pFwd3 = server.arg("forward3").toInt();
+    if (server.hasArg("reverse3")) pRev3 = server.arg("reverse3").toInt();
+    if (server.hasArg("forwardMs3")) pFwdMs3 = strtoul(server.arg("forwardMs3").c_str(), NULL, 10);
+    if (server.hasArg("reverseMs3")) pRevMs3 = strtoul(server.arg("reverseMs3").c_str(), NULL, 10);
+    if (server.hasArg("pauseMs3")) pPauseMs3 = strtoul(server.arg("pauseMs3").c_str(), NULL, 10);
+    if (server.hasArg("cycles3")) pCyc3 = server.arg("cycles3").toInt();
+
+    // S4 args
+    if (server.hasArg("stop4")) pStop4 = server.arg("stop4").toInt();
+    if (server.hasArg("forward4")) pFwd4 = server.arg("forward4").toInt();
+    if (server.hasArg("reverse4")) pRev4 = server.arg("reverse4").toInt();
+    if (server.hasArg("forwardMs4")) pFwdMs4 = strtoul(server.arg("forwardMs4").c_str(), NULL, 10);
+    if (server.hasArg("reverseMs4")) pRevMs4 = strtoul(server.arg("reverseMs4").c_str(), NULL, 10);
+    if (server.hasArg("pauseMs4")) pPauseMs4 = strtoul(server.arg("pauseMs4").c_str(), NULL, 10);
+    if (server.hasArg("cycles4")) pCyc4 = server.arg("cycles4").toInt();
+
     if (motionIsRunning()) {
-        sendJsonError(409, "Không thể lưu khi Servo đang chạy");
+        sendJsonError(409, "Khong the luu khi Servo dang chay");
         return;
     }
 
@@ -1089,14 +1903,32 @@ void handleConfig() {
     pauseMs2 = constrain(pPauseMs2, 0UL, MOTION_TIME_MAX);
     cycles2 = constrain(pCyc2, CYCLES_MIN, CYCLES_MAX);
 
+    servo3Stop = constrain(pStop3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo3Forward = constrain(pFwd3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo3Reverse = constrain(pRev3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    forwardMs3 = constrain(pFwdMs3, MOTION_TIME_MIN, MOTION_TIME_MAX);
+    reverseMs3 = constrain(pRevMs3, MOTION_TIME_MIN, MOTION_TIME_MAX);
+    pauseMs3 = constrain(pPauseMs3, 0UL, MOTION_TIME_MAX);
+    cycles3 = constrain(pCyc3, CYCLES_MIN, CYCLES_MAX);
+
+    servo4Stop = constrain(pStop4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo4Forward = constrain(pFwd4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    servo4Reverse = constrain(pRev4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+    forwardMs4 = constrain(pFwdMs4, MOTION_TIME_MIN, MOTION_TIME_MAX);
+    reverseMs4 = constrain(pRevMs4, MOTION_TIME_MIN, MOTION_TIME_MAX);
+    pauseMs4 = constrain(pPauseMs4, 0UL, MOTION_TIME_MAX);
+    cycles4 = constrain(pCyc4, CYCLES_MIN, CYCLES_MAX);
+
     saveConfig();
     servo1StopNow();
     servo2StopNow();
+    servo3StopNow();
+    servo4StopNow();
     server.send(200, "application/json; charset=utf-8", makeConfigJson());
 }
 
 // ============================================================
-// 16. WEB SERVER SETUP
+// 16. WEB SERVER SETUP (REST API FOR 4 SERVOS & 2 COLUMNS)
 // ============================================================
 
 void setupWebServer() {
@@ -1106,33 +1938,55 @@ void setupWebServer() {
     server.on("/api/config/reset", HTTP_POST, handleFactoryReset);
     server.on("/api/config", HTTP_POST, handleConfig);
 
-    // Servo 1 endpoints
-    server.on("/api/s1/start", HTTP_POST, []() { startMotion1(); sendJsonOk("S1 đã bắt đầu"); });
-    server.on("/api/s1/stop", HTTP_POST, []() { stopMotion1(); sendJsonOk("S1 đã dừng"); });
-    server.on("/api/s1/open", HTTP_POST, []() { startOpen1(); sendJsonOk("S1 đang mở"); });
-    server.on("/api/s1/close", HTTP_POST, []() { startClose1(); sendJsonOk("S1 đang đóng"); });
-    server.on("/api/s1/test/forward", HTTP_POST, []() { testForward1(); sendJsonOk("S1 test thuận"); });
-    server.on("/api/s1/test/reverse", HTTP_POST, []() { testReverse1(); sendJsonOk("S1 test nghịch"); });
+    // Servo 1 endpoints (Column 1 Lower Gate)
+    server.on("/api/s1/start", HTTP_POST, []() { startMotion1(); sendJsonOk("S1 da bat dau"); });
+    server.on("/api/s1/stop", HTTP_POST, []() { stopMotion1(); sendJsonOk("S1 da dung"); });
+    server.on("/api/s1/open", HTTP_POST, []() { startOpen1(); sendJsonOk("S1 dang mo"); });
+    server.on("/api/s1/close", HTTP_POST, []() { startClose1(); sendJsonOk("S1 dang dong"); });
+    server.on("/api/s1/test/forward", HTTP_POST, []() { testForward1(); sendJsonOk("S1 test thuan"); });
+    server.on("/api/s1/test/reverse", HTTP_POST, []() { testReverse1(); sendJsonOk("S1 test nghich"); });
 
-    // Servo 2 endpoints
-    server.on("/api/s2/start", HTTP_POST, []() { startMotion2(); sendJsonOk("S2 đã bắt đầu"); });
-    server.on("/api/s2/stop", HTTP_POST, []() { stopMotion2(); sendJsonOk("S2 đã dừng"); });
-    server.on("/api/s2/open", HTTP_POST, []() { startOpen2(); sendJsonOk("S2 đang mở"); });
-    server.on("/api/s2/close", HTTP_POST, []() { startClose2(); sendJsonOk("S2 đang đóng"); });
-    server.on("/api/s2/test/forward", HTTP_POST, []() { testForward2(); sendJsonOk("S2 test thuận"); });
-    server.on("/api/s2/test/reverse", HTTP_POST, []() { testReverse2(); sendJsonOk("S2 test nghịch"); });
+    // Servo 2 endpoints (Column 1 Upper Gate)
+    server.on("/api/s2/start", HTTP_POST, []() { startMotion2(); sendJsonOk("S2 da bat dau"); });
+    server.on("/api/s2/stop", HTTP_POST, []() { stopMotion2(); sendJsonOk("S2 da dung"); });
+    server.on("/api/s2/open", HTTP_POST, []() { startOpen2(); sendJsonOk("S2 dang mo"); });
+    server.on("/api/s2/close", HTTP_POST, []() { startClose2(); sendJsonOk("S2 dang dong"); });
+    server.on("/api/s2/test/forward", HTTP_POST, []() { testForward2(); sendJsonOk("S2 test thuan"); });
+    server.on("/api/s2/test/reverse", HTTP_POST, []() { testReverse2(); sendJsonOk("S2 test nghich"); });
+
+    // Servo 3 endpoints (Column 2 Lower Gate)
+    server.on("/api/s3/start", HTTP_POST, []() { startMotion3(); sendJsonOk("S3 da bat dau"); });
+    server.on("/api/s3/stop", HTTP_POST, []() { stopMotion3(); sendJsonOk("S3 da dung"); });
+    server.on("/api/s3/open", HTTP_POST, []() { startOpen3(); sendJsonOk("S3 dang mo"); });
+    server.on("/api/s3/close", HTTP_POST, []() { startClose3(); sendJsonOk("S3 dang dong"); });
+    server.on("/api/s3/test/forward", HTTP_POST, []() { testForward3(); sendJsonOk("S3 test thuan"); });
+    server.on("/api/s3/test/reverse", HTTP_POST, []() { testReverse3(); sendJsonOk("S3 test nghich"); });
+
+    // Servo 4 endpoints (Column 2 Upper Gate)
+    server.on("/api/s4/start", HTTP_POST, []() { startMotion4(); sendJsonOk("S4 da bat dau"); });
+    server.on("/api/s4/stop", HTTP_POST, []() { stopMotion4(); sendJsonOk("S4 da dung"); });
+    server.on("/api/s4/open", HTTP_POST, []() { startOpen4(); sendJsonOk("S4 dang mo"); });
+    server.on("/api/s4/close", HTTP_POST, []() { startClose4(); sendJsonOk("S4 dang dong"); });
+    server.on("/api/s4/test/forward", HTTP_POST, []() { testForward4(); sendJsonOk("S4 test thuan"); });
+    server.on("/api/s4/test/reverse", HTTP_POST, []() { testReverse4(); sendJsonOk("S4 test nghich"); });
+
+    // FIFO Column Dispense endpoints
+    server.on("/api/col1/dispense", HTTP_POST, []() { startDispenseCol1(); sendJsonOk("Cot 1 (Tao) dang nha to FIFO"); });
+    server.on("/api/col2/dispense", HTTP_POST, []() { startDispenseCol2(); sendJsonOk("Cot 2 (Dua luoi) dang nha to FIFO"); });
+    server.on("/api/dispense/1", HTTP_POST, []() { startDispenseCol1(); sendJsonOk("Cot 1 dang nha to FIFO"); });
+    server.on("/api/dispense/2", HTTP_POST, []() { startDispenseCol2(); sendJsonOk("Cot 2 dang nha to FIFO"); });
 
     // Master / All endpoints
-    server.on("/api/all/start", HTTP_POST, []() { startAll(); sendJsonOk("Tất cả đã bắt đầu"); });
-    server.on("/api/all/stop", HTTP_POST, []() { stopAll(); sendJsonOk("Tất cả đã dừng"); });
-    server.on("/api/all/open", HTTP_POST, []() { openAll(); sendJsonOk("Tất cả đang mở"); });
-    server.on("/api/all/close", HTTP_POST, []() { closeAll(); sendJsonOk("Tất cả đang đóng"); });
+    server.on("/api/all/start", HTTP_POST, []() { startAll(); sendJsonOk("Tat ca 4 Servo da bat dau"); });
+    server.on("/api/all/stop", HTTP_POST, []() { stopAll(); sendJsonOk("Tat ca Servo da dung"); });
+    server.on("/api/all/open", HTTP_POST, []() { openAll(); sendJsonOk("Tat ca 4 Servo dang mo"); });
+    server.on("/api/all/close", HTTP_POST, []() { closeAll(); sendJsonOk("Tat ca 4 Servo dang dong"); });
 
     // IR Sensor endpoints
     server.on("/api/ir/reset", HTTP_POST, []() {
         irObjectCount = 0;
-        updateLcdDual();
-        sendJsonOk("Đã reset bộ đếm tô về 0");
+        updateLcdQuad();
+        sendJsonOk("Da reset bo dem to ve 0");
     });
     server.on("/api/ir/auto", HTTP_POST, []() {
         if (server.hasArg("mode")) {
@@ -1141,8 +1995,8 @@ void setupWebServer() {
             irAutoTriggerServo = (irAutoTriggerServo == 0) ? 1 : 0;
         }
         saveConfig();
-        updateLcdDual();
-        sendJsonOk("Đã cập nhật chế độ tự động IR");
+        updateLcdQuad();
+        sendJsonOk("Da cap nhat che do tu dong IR");
     });
     server.on("/api/ir/tx", HTTP_POST, []() {
         if (server.hasArg("enable")) {
@@ -1151,23 +2005,23 @@ void setupWebServer() {
             irTxEnabled = !irTxEnabled;
         }
         digitalWrite(IR_TRANSMITTER_PIN, irTxEnabled ? HIGH : LOW);
-        sendJsonOk("Đã đổi trạng thái bộ phát IR");
+        sendJsonOk("Da doi trang thai bo phat IR");
     });
 
-    // Backwards compatibility endpoints (map to S1)
-    server.on("/api/start", HTTP_POST, []() { startMotion1(); sendJsonOk("Đã bắt đầu"); });
-    server.on("/api/stop", HTTP_POST, []() { stopAll(); sendJsonOk("Đã dừng"); });
-    server.on("/api/open", HTTP_POST, []() { startOpen1(); sendJsonOk("Đang mở"); });
-    server.on("/api/close", HTTP_POST, []() { startClose1(); sendJsonOk("Đang đóng"); });
-    server.on("/api/test/forward", HTTP_POST, []() { testForward1(); sendJsonOk("Test thuận"); });
-    server.on("/api/test/reverse", HTTP_POST, []() { testReverse1(); sendJsonOk("Test nghịch"); });
+    // Backwards compatibility endpoints
+    server.on("/api/start", HTTP_POST, []() { startMotion1(); sendJsonOk("Da bat dau"); });
+    server.on("/api/stop", HTTP_POST, []() { stopAll(); sendJsonOk("Da dung"); });
+    server.on("/api/open", HTTP_POST, []() { startOpen1(); sendJsonOk("Dang mo"); });
+    server.on("/api/close", HTTP_POST, []() { startClose1(); sendJsonOk("Dang dong"); });
+    server.on("/api/test/forward", HTTP_POST, []() { testForward1(); sendJsonOk("Test thuan"); });
+    server.on("/api/test/reverse", HTTP_POST, []() { testReverse1(); sendJsonOk("Test nghich"); });
 
     server.onNotFound([]() {
-        sendJsonError(404, "Không tìm thấy API hoặc trang");
+        sendJsonError(404, "Khong tim thay API hoac trang");
     });
 
     server.begin();
-    Serial.println("[WEB] Server started with Dual-Servo endpoints");
+    Serial.println("[WEB] Server started with Quad-Servo (4 channels) endpoints");
 }
 
 // ============================================================
@@ -1203,34 +2057,34 @@ void handleSerial() {
     // --- SERVO 1 COMMANDS ---
     } else if (cmd == "S1_START" || cmd == "START" || cmd == "POST /api/s1/start") {
         if (motionIsRunning(motionState1)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 dang chay\"}");
         } else {
             startMotion1();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 đã bắt đầu\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 da bat dau\"}");
         }
     } else if (cmd == "S1_STOP" || cmd == "POST /api/s1/stop") {
         stopMotion1();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 đã dừng\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 da dung\"}");
     } else if (cmd == "S1_OPEN" || cmd == "OPEN" || cmd == "POST /api/s1/open") {
         if (motionIsRunning(motionState1)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 dang chay\"}");
         } else {
             startOpen1();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 đang mở\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 dang mo\"}");
         }
     } else if (cmd == "S1_CLOSE" || cmd == "CLOSE" || cmd == "POST /api/s1/close") {
         if (motionIsRunning(motionState1)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 1 dang chay\"}");
         } else {
             startClose1();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 đang đóng\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 dang dong\"}");
         }
     } else if (cmd == "S1_TEST_FWD" || cmd == "TEST_FWD") {
         testForward1();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 quay thuận\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 quay thuan\"}");
     } else if (cmd == "S1_TEST_REV" || cmd == "TEST_REV") {
         testReverse1();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 quay nghịch\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 1 quay nghich\"}");
     } else if (cmd.startsWith("S1_CALIB ") || cmd.startsWith("CALIB ")) {
         int val = (cmd.startsWith("S1_CALIB ")) ? cmd.substring(9).toInt() : cmd.substring(6).toInt();
         servo1Stop = val;
@@ -1240,53 +2094,143 @@ void handleSerial() {
     // --- SERVO 2 COMMANDS ---
     } else if (cmd == "S2_START" || cmd == "POST /api/s2/start") {
         if (motionIsRunning(motionState2)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 dang chay\"}");
         } else {
             startMotion2();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 đã bắt đầu\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 da bat dau\"}");
         }
     } else if (cmd == "S2_STOP" || cmd == "POST /api/s2/stop") {
         stopMotion2();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 đã dừng\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 da dung\"}");
     } else if (cmd == "S2_OPEN" || cmd == "POST /api/s2/open") {
         if (motionIsRunning(motionState2)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 dang chay\"}");
         } else {
             startOpen2();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 đang mở\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 dang mo\"}");
         }
     } else if (cmd == "S2_CLOSE" || cmd == "POST /api/s2/close") {
         if (motionIsRunning(motionState2)) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 2 dang chay\"}");
         } else {
             startClose2();
-            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 đang đóng\"}");
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 dang dong\"}");
         }
     } else if (cmd == "S2_TEST_FWD") {
         testForward2();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 quay thuận\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 quay thuan\"}");
     } else if (cmd == "S2_TEST_REV") {
         testReverse2();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 quay nghịch\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 2 quay nghich\"}");
     } else if (cmd.startsWith("S2_CALIB ")) {
         int val = cmd.substring(9).toInt();
         servo2Stop = val;
         servo2TestStopValue(val);
         Serial.printf("[RES] {\"ok\":true,\"channel\":2,\"value\":%d}\n", val);
 
+    // --- SERVO 3 COMMANDS ---
+    } else if (cmd == "S3_START" || cmd == "POST /api/s3/start") {
+        if (motionIsRunning(motionState3)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 3 dang chay\"}");
+        } else {
+            startMotion3();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 da bat dau\"}");
+        }
+    } else if (cmd == "S3_STOP" || cmd == "POST /api/s3/stop") {
+        stopMotion3();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 da dung\"}");
+    } else if (cmd == "S3_OPEN" || cmd == "POST /api/s3/open") {
+        if (motionIsRunning(motionState3)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 3 dang chay\"}");
+        } else {
+            startOpen3();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 dang mo\"}");
+        }
+    } else if (cmd == "S3_CLOSE" || cmd == "POST /api/s3/close") {
+        if (motionIsRunning(motionState3)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 3 dang chay\"}");
+        } else {
+            startClose3();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 dang dong\"}");
+        }
+    } else if (cmd == "S3_TEST_FWD") {
+        testForward3();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 quay thuan\"}");
+    } else if (cmd == "S3_TEST_REV") {
+        testReverse3();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 3 quay nghich\"}");
+    } else if (cmd.startsWith("S3_CALIB ")) {
+        int val = cmd.substring(9).toInt();
+        servo3Stop = val;
+        servo3TestStopValue(val);
+        Serial.printf("[RES] {\"ok\":true,\"channel\":3,\"value\":%d}\n", val);
+
+    // --- SERVO 4 COMMANDS ---
+    } else if (cmd == "S4_START" || cmd == "POST /api/s4/start") {
+        if (motionIsRunning(motionState4)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 4 dang chay\"}");
+        } else {
+            startMotion4();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 da bat dau\"}");
+        }
+    } else if (cmd == "S4_STOP" || cmd == "POST /api/s4/stop") {
+        stopMotion4();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 da dung\"}");
+    } else if (cmd == "S4_OPEN" || cmd == "POST /api/s4/open") {
+        if (motionIsRunning(motionState4)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 4 dang chay\"}");
+        } else {
+            startOpen4();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 dang mo\"}");
+        }
+    } else if (cmd == "S4_CLOSE" || cmd == "POST /api/s4/close") {
+        if (motionIsRunning(motionState4)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Servo 4 dang chay\"}");
+        } else {
+            startClose4();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 dang dong\"}");
+        }
+    } else if (cmd == "S4_TEST_FWD") {
+        testForward4();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 quay thuan\"}");
+    } else if (cmd == "S4_TEST_REV") {
+        testReverse4();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Servo 4 quay nghich\"}");
+    } else if (cmd.startsWith("S4_CALIB ")) {
+        int val = cmd.substring(9).toInt();
+        servo4Stop = val;
+        servo4TestStopValue(val);
+        Serial.printf("[RES] {\"ok\":true,\"channel\":4,\"value\":%d}\n", val);
+
+    // --- FIFO COLUMN DISPENSE COMMANDS ---
+    } else if (cmd == "DISPENSE 1" || cmd == "COL1_DISPENSE" || cmd == "POST /api/col1/dispense" || cmd == "POST /api/dispense/1") {
+        if (col1DispenseState != COL_IDLE || motionIsRunning(motionState1) || motionIsRunning(motionState2)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Cot 1 dang ban\"}");
+        } else {
+            startDispenseCol1();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Cot 1 dang nha to FIFO\"}");
+        }
+    } else if (cmd == "DISPENSE 2" || cmd == "COL2_DISPENSE" || cmd == "POST /api/col2/dispense" || cmd == "POST /api/dispense/2") {
+        if (col2DispenseState != COL_IDLE || motionIsRunning(motionState3) || motionIsRunning(motionState4)) {
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Cot 2 dang ban\"}");
+        } else {
+            startDispenseCol2();
+            Serial.println("[RES] {\"ok\":true,\"message\":\"Cot 2 dang nha to FIFO\"}");
+        }
+
     // --- MASTER COMMANDS ---
     } else if (cmd == "ALL_START" || cmd == "POST /api/all/start") {
         startAll();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Tất cả Servo đã bắt đầu\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Tat ca 4 Servo da bat dau\"}");
     } else if (cmd == "ALL_STOP" || cmd == "STOP" || cmd == "POST /api/stop" || cmd == "POST /api/all/stop") {
         stopAll();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Tất cả Servo đã dừng\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Tat ca Servo da dung\"}");
     } else if (cmd == "ALL_OPEN" || cmd == "POST /api/all/open") {
         openAll();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Tất cả Servo đang mở\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Tat ca 4 Servo dang mo\"}");
     } else if (cmd == "ALL_CLOSE" || cmd == "POST /api/all/close") {
         closeAll();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Tất cả Servo đang đóng\"}");
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Tat ca 4 Servo dang dong\"}");
 
     // --- CONFIG COMMANDS ---
     } else if (cmd.startsWith("CONFIG_SET ") || cmd.startsWith("POST /api/config ")) {
@@ -1295,6 +2239,10 @@ void handleSerial() {
         unsigned long pFwdMs1 = forwardMs1, pRevMs1 = reverseMs1, pPauseMs1 = pauseMs1;
         int pStop2 = servo2Stop, pFwd2 = servo2Forward, pRev2 = servo2Reverse, pCyc2 = cycles2;
         unsigned long pFwdMs2 = forwardMs2, pRevMs2 = reverseMs2, pPauseMs2 = pauseMs2;
+        int pStop3 = servo3Stop, pFwd3 = servo3Forward, pRev3 = servo3Reverse, pCyc3 = cycles3;
+        unsigned long pFwdMs3 = forwardMs3, pRevMs3 = reverseMs3, pPauseMs3 = pauseMs3;
+        int pStop4 = servo4Stop, pFwd4 = servo4Forward, pRev4 = servo4Reverse, pCyc4 = cycles4;
+        unsigned long pFwdMs4 = forwardMs4, pRevMs4 = reverseMs4, pPauseMs4 = pauseMs4;
 
         int idx = 0;
         while (idx < params.length()) {
@@ -1306,6 +2254,7 @@ void handleSerial() {
             String val = (sp == -1) ? params.substring(eq + 1) : params.substring(eq + 1, sp);
             val.trim();
 
+            // S1
             if (key == "stop" || key == "stop1") pStop1 = val.toInt();
             else if (key == "forward" || key == "forward1") pFwd1 = val.toInt();
             else if (key == "reverse" || key == "reverse1") pRev1 = val.toInt();
@@ -1321,13 +2270,29 @@ void handleSerial() {
             else if (key == "reverseMs2" || key == "revMs2") pRevMs2 = strtoul(val.c_str(), NULL, 10);
             else if (key == "pauseMs2") pPauseMs2 = strtoul(val.c_str(), NULL, 10);
             else if (key == "cycles2") pCyc2 = val.toInt();
+            // S3
+            else if (key == "stop3") pStop3 = val.toInt();
+            else if (key == "forward3") pFwd3 = val.toInt();
+            else if (key == "reverse3") pRev3 = val.toInt();
+            else if (key == "forwardMs3" || key == "fwdMs3") pFwdMs3 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "reverseMs3" || key == "revMs3") pRevMs3 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "pauseMs3") pPauseMs3 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "cycles3") pCyc3 = val.toInt();
+            // S4
+            else if (key == "stop4") pStop4 = val.toInt();
+            else if (key == "forward4") pFwd4 = val.toInt();
+            else if (key == "reverse4") pRev4 = val.toInt();
+            else if (key == "forwardMs4" || key == "fwdMs4") pFwdMs4 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "reverseMs4" || key == "revMs4") pRevMs4 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "pauseMs4") pPauseMs4 = strtoul(val.c_str(), NULL, 10);
+            else if (key == "cycles4") pCyc4 = val.toInt();
 
             if (sp == -1) break;
             idx = sp + 1;
         }
 
         if (motionIsRunning()) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Không thể đổi cấu hình khi Servo đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Khong the doi cau hinh khi Servo dang chay\"}");
         } else {
             servo1Stop = constrain(pStop1, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
             servo1Forward = constrain(pFwd1, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
@@ -1345,32 +2310,53 @@ void handleSerial() {
             pauseMs2 = constrain(pPauseMs2, 0UL, MOTION_TIME_MAX);
             cycles2 = constrain(pCyc2, CYCLES_MIN, CYCLES_MAX);
 
+            servo3Stop = constrain(pStop3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            servo3Forward = constrain(pFwd3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            servo3Reverse = constrain(pRev3, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            forwardMs3 = constrain(pFwdMs3, MOTION_TIME_MIN, MOTION_TIME_MAX);
+            reverseMs3 = constrain(pRevMs3, MOTION_TIME_MIN, MOTION_TIME_MAX);
+            pauseMs3 = constrain(pPauseMs3, 0UL, MOTION_TIME_MAX);
+            cycles3 = constrain(pCyc3, CYCLES_MIN, CYCLES_MAX);
+
+            servo4Stop = constrain(pStop4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            servo4Forward = constrain(pFwd4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            servo4Reverse = constrain(pRev4, SERVO_VALUE_MIN, SERVO_VALUE_MAX);
+            forwardMs4 = constrain(pFwdMs4, MOTION_TIME_MIN, MOTION_TIME_MAX);
+            reverseMs4 = constrain(pRevMs4, MOTION_TIME_MIN, MOTION_TIME_MAX);
+            pauseMs4 = constrain(pPauseMs4, 0UL, MOTION_TIME_MAX);
+            cycles4 = constrain(pCyc4, CYCLES_MIN, CYCLES_MAX);
+
             saveConfig();
             servo1StopNow();
             servo2StopNow();
+            servo3StopNow();
+            servo4StopNow();
             Serial.println("[RES] " + makeConfigJson());
         }
     } else if (cmd == "RESET" || cmd == "POST /api/config/reset") {
         if (motionIsRunning()) {
-            Serial.println("[RES] {\"ok\":false,\"error\":\"Không thể khôi phục khi Servo đang chạy\"}");
+            Serial.println("[RES] {\"ok\":false,\"error\":\"Khong the khoi phuc khi Servo dang chay\"}");
         } else {
             stopAll();
             setDefaultConfig();
             saveConfig();
             servo1StopNow();
             servo2StopNow();
+            servo3StopNow();
+            servo4StopNow();
             Serial.println("[RES] " + makeConfigJson());
         }
+
     // --- IR SENSOR COMMANDS ---
     } else if (cmd == "IR_RESET" || cmd == "POST /api/ir/reset") {
         irObjectCount = 0;
-        updateLcdDual();
-        Serial.println("[RES] {\"ok\":true,\"message\":\"Đã reset bộ đếm tô về 0\"}");
+        updateLcdQuad();
+        Serial.println("[RES] {\"ok\":true,\"message\":\"Da reset bo dem to ve 0\"}");
     } else if (cmd.startsWith("IR_AUTO ") || cmd.startsWith("IR_AUTO_SET ")) {
         int m = cmd.substring(cmd.indexOf(' ') + 1).toInt();
         irAutoTriggerServo = m;
         saveConfig();
-        updateLcdDual();
+        updateLcdQuad();
         Serial.printf("[RES] {\"ok\":true,\"autoTrigger\":%d}\n", m);
     } else if (cmd == "IR_TX_ON") {
         irTxEnabled = true;
@@ -1393,8 +2379,12 @@ void handleSerial() {
             if (!motionIsRunning(motionState2)) startOpen2();
         } else if (irAutoTriggerServo == 3) {
             openAll();
+        } else if (irAutoTriggerServo == 4) {
+            startDispenseCol1();
+        } else if (irAutoTriggerServo == 5) {
+            startDispenseCol2();
         }
-        updateLcdDual();
+        updateLcdQuad();
         Serial.printf("[RES] {\"ok\":true,\"count\":%u,\"detected\":true}\n", irObjectCount);
     } else {
         Serial.println("[RES] {\"ok\":false,\"error\":\"Unknown command\"}");
@@ -1411,14 +2401,18 @@ void setup() {
     delay(500);
 
     Serial.println();
-    Serial.println("================================");
-    Serial.println("ESP32 DUAL SERVO & IR BOWL DETECTOR");
-    Serial.println("LILYGO T-Display-S3");
-    Serial.println("SERVO 1: GPIO 1 | SERVO 2: GPIO 2");
-    Serial.println("IR RX: GPIO 10  | IR TX: GPIO 11");
-    Serial.println("================================");
+    Serial.println("================================================");
+    Serial.println("ESP32 QUAD SERVO & IR BOWL DETECTOR (4 SERVOS)");
+    Serial.println("LILYGO T-Display-S3 / ESP32 DevKit");
+    Serial.printf("SERVO 1 (Col 1 Lower): GPIO %d\n", SERVO_1_PIN);
+    Serial.printf("SERVO 2 (Col 1 Upper): GPIO %d\n", SERVO_2_PIN);
+    Serial.printf("SERVO 3 (Col 2 Lower): GPIO %d\n", SERVO_3_PIN);
+    Serial.printf("SERVO 4 (Col 2 Upper): GPIO %d\n", SERVO_4_PIN);
+    Serial.printf("IR RX: GPIO %d  | IR TX: GPIO %d\n", IR_RECEIVER_PIN, IR_TRANSMITTER_PIN);
+    Serial.println("================================================");
 
-    // 1. Energize display power and backlight
+#if HAS_ST7789_PARALLEL_LCD
+    // 1. Energize display power and backlight (LILYGO T-Display-S3 only)
     pinMode(LCD_POWER_PIN, OUTPUT);
     digitalWrite(LCD_POWER_PIN, HIGH);
     delay(10);
@@ -1426,20 +2420,25 @@ void setup() {
     pinMode(LCD_BL_PIN, OUTPUT);
     digitalWrite(LCD_BL_PIN, HIGH);
 
-    gfx->begin();
-    gfx->fillScreen(COLOR_BLACK);
-    lcdShow("DUAL SERVO S3", "Dang khoi dong...");
+    if (gfx) {
+        gfx->begin();
+        gfx->fillScreen(COLOR_BLACK);
+        lcdShow("QUAD SERVO S3", "Khoi dong 4 Servo...");
+    }
+#endif
 
-    // 2. Allocate LEDC timers
+    // 2. Allocate LEDC timers (4 hardware timers for 4 servos)
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
     ESP32PWM::allocateTimer(2);
     ESP32PWM::allocateTimer(3);
 
-    // 3. Load config and clamp both pins firmly to LOW (zero drift)
+    // 3. Load config and clamp all 4 servo pins firmly to LOW (zero drift)
     loadConfig();
     servo1StopNow();
     servo2StopNow();
+    servo3StopNow();
+    servo4StopNow();
 
     // 3B. Initialize IR Sensor (Receiver & Transmitter)
     setupIrSensor();
@@ -1448,8 +2447,8 @@ void setup() {
     setupWiFi();
     setupWebServer();
 
-    updateLcdDual();
-    Serial.println("[SYSTEM] READY - Cho lenh tu Web hoac Serial...");
+    updateLcdQuad();
+    Serial.println("[SYSTEM] READY - 4 Servo Channels Armed & Ground-Clamped.");
 }
 
 void loop() {
