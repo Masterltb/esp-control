@@ -2,7 +2,7 @@ name: Firmware CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, chore/qa-audit-hardening]
   pull_request:
     branches: [main, master]
 
