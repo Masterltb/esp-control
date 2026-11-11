@@ -271,7 +271,7 @@ def run_tests():
         tester.close()
         with open(os.path.join(validation_dir, 'hil_test_results.json'), 'w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
-        return report
+    return report
 
 if __name__ == '__main__':
     result = run_tests()

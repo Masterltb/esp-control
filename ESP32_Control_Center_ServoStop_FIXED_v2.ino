@@ -28,10 +28,12 @@
 #define BOARD_IR_RECEIVER_PIN     25  // Safe Digital Input (IR Receiver / Beam Sensor)
 #define BOARD_IR_TRANSMITTER_PIN  26  // Safe Digital Output (IR Transmitter LED)
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
-#define HAS_ST7789_PARALLEL_LCD   1
-#else
-#define HAS_ST7789_PARALLEL_LCD   0
+#ifndef HAS_ST7789_PARALLEL_LCD
+  #if defined(CONFIG_IDF_TARGET_ESP32S3)
+    #define HAS_ST7789_PARALLEL_LCD 1
+  #else
+    #define HAS_ST7789_PARALLEL_LCD 0
+  #endif
 #endif
 
 #ifndef SERVO_1_PIN

@@ -1,0 +1,25 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO
+        run: python -m pip install platformio
+      - name: Compile target firmware
+        run: pio run -e lilygo-t-display-s3
+      - name: Check host bridge and HIL script syntax
+        run: python -m py_compile server.py scripts/hil_test_suite.py
